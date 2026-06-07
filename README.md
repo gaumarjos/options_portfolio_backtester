@@ -37,62 +37,65 @@ A hash mismatch warning means the upstream release has been updated; published-a
 
 ```python
 from options_portfolio_backtester import (
-    BacktestEngine, Stock, Type, Direction,
+    BacktestEngine, Stock,
     HistoricalOptionsData, TiingoData,
-    Strategy, StrategyLeg,
-    NearestDelta, PerContractCommission,
-    RiskManager, MaxDelta, MaxDrawdown,
+    deep_otm_put,
 )
 
-# Load data
-options_data = HistoricalOptionsData("data/processed/options.csv")
+# Load data. Parquet is ~5x smaller on disk and ~30x faster to load than CSV.
+options_data = HistoricalOptionsData("data/processed/options.parquet")
 stocks_data = TiingoData("data/processed/stocks.csv")
-schema = options_data.schema
 
-# Define strategy: buy OTM puts on SPY, exit when DTE drops below 30
-strategy = Strategy(schema)
-leg = StrategyLeg("leg_1", schema, option_type=Type.PUT, direction=Direction.BUY)
-leg.entry_filter = (
-    (schema.underlying == "SPY")
-    & (schema.dte >= 60) & (schema.dte <= 120)
-    & (schema.delta >= -0.25) & (schema.delta <= -0.10)
-)
-leg.exit_filter = schema.dte <= 30
-strategy.add_leg(leg)
+# Build the strategy with a canonical preset — the Spitznagel tail-hedge leg
+strategy = deep_otm_put(options_data.schema, "SPY")
 
-# Run backtest: 97% stocks, 3% options
-engine = BacktestEngine(
-    allocation={"stocks": 0.97, "options": 0.03, "cash": 0.0},
-    initial_capital=1_000_000,
-    cost_model=PerContractCommission(rate=0.65),
-    signal_selector=NearestDelta(target_delta=-0.20),
-    risk_manager=RiskManager([MaxDelta(100.0), MaxDrawdown(0.20)]),
-)
+# Configure the framing: 100% SPY + 0.5% external put budget (Spitznagel)
+engine = BacktestEngine({"stocks": 1.0, "options": 0.0, "cash": 0.0},
+                       initial_capital=1_000_000)
+engine.use_external_budget(annual_pct=0.005)
+engine.options_budget_pct = 0.005
 engine.stocks = [Stock("SPY", 1.0)]
 engine.stocks_data = stocks_data
 engine.options_data = options_data
 engine.options_strategy = strategy
-engine.run(rebalance_freq=1)
+engine.run(rebalance_freq=1, rebalance_unit="BMS")
 
-# Results
-print(engine.balance["total capital"].iloc[-1])  # final capital
-print(len(engine.trade_log))                      # number of trades
+# Inspect the results — the dataclass bundles balance, trades, config, and engine version
+results = engine.get_results()
+print(results.summary())
+# {'annual_return': 13.5, 'max_drawdown': -46.4, 'sharpe': 0.72, 'trades': 327, ...}
 ```
+
+The AQR / allocation-reducing framing is one helper away:
+
+```python
+engine.use_allocation(stocks=0.99, options=0.01, cash=0.0)
+engine.options_strategy = near_atm_put_protection(schema, "SPY")
+```
+
+See [`research/spitznagel_spy/FRAMINGS.md`](https://github.com/unbalancedparentheses/finance_research/blob/main/research/spitznagel_spy/FRAMINGS.md) in the companion repo for the difference between the two framings and what each one produces.
 
 ### Strategy presets
 
 Instead of building legs manually:
 
 ```python
-from options_portfolio_backtester import Strangle
+from options_portfolio_backtester import (
+    Strangle, deep_otm_put, near_atm_put_protection,
+)
 
+# Tail-hedge primitives (function style, return a configured Strategy)
+spitznagel_leg = deep_otm_put(schema, "SPY")   # delta -0.10 to -0.02, DTE 90-180
+aqr_leg = near_atm_put_protection(schema, "SPY")  # 5% OTM, monthly
+
+# Other presets (class style)
 strangle = Strangle(schema, "short", "SPY",
                     dte_entry_range=(30, 60), dte_exit=7,
                     otm_pct=5, pct_tolerance=1,
                     exit_thresholds=(0.2, 0.2))
 ```
 
-Available presets: `Strangle`, `IronCondor`, `CoveredCall`, `CashSecuredPut`, `Collar`, `Butterfly`.
+Available presets: `deep_otm_put`, `near_atm_put_protection`, `Strangle`, `IronCondor`, `CoveredCall`, `CashSecuredPut`, `Collar`, `Butterfly`.
 
 ### Stock-only backtest with algo pipeline
 
