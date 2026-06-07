@@ -29,15 +29,53 @@ BASE_DIR = Path(__file__).resolve().parent
 RAW_DIR = BASE_DIR / "raw"
 PROCESSED_DIR = BASE_DIR / "processed"
 
-# Self-hosted data on GitHub Releases (primary source)
+# Self-hosted data on GitHub Releases (primary, canonical source).
+# This is the source we pin reproductions to; fallbacks below give different
+# bytes and are only consulted when --allow-fallback is passed.
 RELEASE_URL = "https://github.com/lambdaclass/options_backtester/releases/download/data-v1"
 
-# philippdubach/options-data — 104 symbols, options + underlying (underlying empty for some ETFs)
-OPTIONS_DATA_URL = "https://static.philippdubach.com/data/options"
+# Canonical SHA-256 hashes for files served from RELEASE_URL. When the
+# downloaded file's hash does not match what is recorded here, the
+# downloader prints a warning so the user can decide whether to keep
+# stale-but-reproducible bytes or accept a new canonical version. This
+# is what gives reproducibility a name: pin the hash, you pin the result.
+CANONICAL_HASHES = {
+    "SPY_options.parquet":    "a7152991b45b81f090f970e945bf88def8093b8ecb9b250e9891cb6d88041f0a",
+    "SPY_underlying.parquet": "847e60a441eb10969d87cd4a6da604257b782d9076168f68d5730b84096c79db",
+}
 
-# philippdubach/options-dataset-hist — SPY/IWM/QQQ, proper underlying_prices via GitHub LFS
+# Fallback sources. These give different bytes than the canonical release
+# and are only consulted when --allow-fallback is passed on the command
+# line. Default behaviour is to fail loudly if the canonical source is
+# unreachable rather than silently substitute.
+OPTIONS_DATA_URL = "https://static.philippdubach.com/data/options"
 HIST_REPO_RAW = "https://github.com/philippdubach/options-dataset-hist/raw/main/data"
 HIST_SYMBOLS = {"SPY", "IWM", "QQQ"}
+
+# Module-level toggle, set by main() from the CLI flag.
+ALLOW_FALLBACK = False
+
+
+def _verify_canonical_hash(dest, expected_hash):
+    """Compare the downloaded file's SHA-256 to the canonical hash and
+    print a warning if it differs. Does not delete or refuse the file;
+    callers decide what to do with mismatches."""
+    import hashlib
+    h = hashlib.sha256()
+    with open(dest, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    got = h.hexdigest()
+    if got != expected_hash:
+        print(
+            f"  WARNING: hash mismatch for {dest.name}:\n"
+            f"    expected {expected_hash}\n"
+            f"    got      {got}\n"
+            f"  The canonical release may have been updated. If you need "
+            f"bit-for-bit reproducibility against a published article, "
+            f"check the article's pinned hash.",
+            file=sys.stderr,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -68,17 +106,30 @@ def _download(url, dest, force=False):
 
 
 def download_options_parquet(symbol, force=False):
-    """Download options parquet. Priority: GitHub Release > options-data CDN."""
+    """Download options parquet. Priority: GitHub Release (canonical) >
+    options-data CDN (only if --allow-fallback was passed)."""
     sym = symbol.upper()
 
-    # 1. Self-hosted GitHub Release
-    dest = RAW_DIR / "release" / f"{sym}_options.parquet"
-    url = f"{RELEASE_URL}/{sym}_options.parquet"
+    # 1. Self-hosted GitHub Release (canonical source)
+    fname = f"{sym}_options.parquet"
+    dest = RAW_DIR / "release" / fname
+    url = f"{RELEASE_URL}/{fname}"
     result = _download(url, dest, force)
     if result is not None:
+        if fname in CANONICAL_HASHES:
+            _verify_canonical_hash(result, CANONICAL_HASHES[fname])
         return result
 
-    # 2. options-data CDN
+    if not ALLOW_FALLBACK:
+        print(
+            f"  Canonical source for {sym} options is unreachable. "
+            f"Pass --allow-fallback to attempt the options-data CDN instead "
+            f"(returns different bytes; not pinned to any article reproduction).",
+            file=sys.stderr,
+        )
+        return None
+
+    # 2. options-data CDN (fallback)
     dest = RAW_DIR / "options-data" / sym / "options.parquet"
     url = f"{OPTIONS_DATA_URL}/{sym.lower()}/options.parquet"
     return _download(url, dest, force)
@@ -393,7 +444,19 @@ def main():
         "--update", action="store_true",
         help="Re-download parquets to get latest data",
     )
+    parser.add_argument(
+        "--allow-fallback", action="store_true",
+        help=(
+            "If the canonical GitHub Release source is unreachable, fall back "
+            "to the options-data CDN, the dataset-hist repo, or yfinance. "
+            "Fallbacks return different bytes than the canonical source and "
+            "break bit-for-bit reproducibility against published articles."
+        ),
+    )
     args = parser.parse_args()
+
+    global ALLOW_FALLBACK
+    ALLOW_FALLBACK = args.allow_fallback
 
     start = pd.Timestamp(args.start)
     end = pd.Timestamp(args.end)

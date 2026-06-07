@@ -38,7 +38,10 @@ bench: rust-build ## Run Python benchmarks (requires Rust build)
 		echo "Install pytest-benchmark for Python benchmarks"
 
 install-dev: ## Install local dev deps into active nix dev environment
-	$(PYTHON) -m pip install -e '.[dev,charts,notebooks,rust]'
+	PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 $(PYTHON) -m pip install -e '.[dev,charts,notebooks,rust]'
+
+verify-articles: ## Reproduce all published-article tables and assert they still match
+	$(RUNCMD) $(PYTHON) -m pytest -v tests/test_article_reproduction.py
 
 compare-bt: ## Compare stock-only monthly rebalance vs bt library
 	$(RUNCMD) $(PYTHON) scripts/compare_with_bt.py

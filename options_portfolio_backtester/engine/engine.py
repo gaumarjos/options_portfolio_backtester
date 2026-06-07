@@ -121,6 +121,54 @@ class BacktestEngine:
         self.run_metadata: dict[str, Any] = {}
         self._event_log_rows: list[dict[str, Any]] = []
 
+    # -- Framing helpers ---------------------------------------------------
+    # The two put-overlay framings in the literature map to two
+    # different configurations of this engine. Both are configurable via
+    # the lower-level allocation + options_budget_pct attributes; these
+    # helpers name them in the literature's vocabulary so the caller's
+    # intent is unambiguous. See research/spitznagel_spy/FRAMINGS.md in
+    # the finance_research repo for the full discussion.
+
+    def use_external_budget(self, annual_pct: float) -> "BacktestEngine":
+        """Spitznagel framing: keep 100% in stocks and spend ``annual_pct``
+        of portfolio value per year on options on top of that, funded
+        externally (treated as a separate budget line item).
+
+        ``annual_pct`` is expressed as a fraction, e.g. ``0.005`` for a
+        0.5% annual premium budget. The per-rebalance budget is derived
+        from the annual budget and the rebalance frequency. Returns
+        ``self`` so calls can be chained.
+        """
+        total = sum(self._raw_allocation.values()) if self._raw_allocation else 1.0
+        self._raw_allocation = {"stocks": 1.0, "options": 0.0, "cash": 0.0}
+        self.allocation = dict(self._raw_allocation)
+        self.options_budget_annual_pct = annual_pct
+        # Keep options_budget_pct in sync for per-rebalance accounting
+        # (the engine derives per-rebalance from annual when run()).
+        return self
+
+    def use_allocation(self, stocks: float, options: float, cash: float = 0.0) -> "BacktestEngine":
+        """Allocation-reducing framing (the configuration AQR / Israelov
+        actually test): hold ``stocks`` fraction of the portfolio in
+        stocks, ``options`` fraction in puts, and any remainder in cash.
+        Fractions must sum to 1.0.
+
+        Returns ``self`` so calls can be chained. Equivalent to setting
+        the ``allocation`` dict at construction time, but names the
+        intent.
+        """
+        total = stocks + options + cash
+        if not np.isclose(total, 1.0, atol=1e-6):
+            raise ValueError(
+                f"Allocation must sum to 1.0, got {total:.4f} "
+                f"(stocks={stocks}, options={options}, cash={cash})"
+            )
+        self._raw_allocation = {"stocks": stocks, "options": options, "cash": cash}
+        self.allocation = dict(self._raw_allocation)
+        self.options_budget_annual_pct = None
+        self.options_budget_pct = None
+        return self
+
     # -- Properties (same API as original Backtest) --
 
     @property
