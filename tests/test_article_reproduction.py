@@ -207,3 +207,51 @@ def test_spitznagel_sweet_spot_shape(options_data, stocks_data):
         f"Sharpe at 1.0% ({sharpes[0.010]:.3f}) should exceed "
         f"Sharpe at 3.3% ({sharpes[0.033]:.3f}); sweet-spot shape lost"
     )
+
+
+# --- Fast smoke variant -----------------------------------------------------
+# The tests above need the full 17-year SPY chain and take ~3 minutes to run.
+# This fast variant runs only the 0.5% Spitznagel budget against the full
+# sample and asserts the qualitative shape — overlay beats SPY on return and
+# Sharpe — without pinning specific numbers. Suitable as a pre-commit /
+# fast-CI smoke that catches "Spitznagel framing fundamentally broken"
+# without paying for the full parametrized run.
+
+@requires_data
+@pytest.mark.smoke
+def test_spitznagel_smoke_qualitative(options_data, stocks_data):
+    """Single-budget qualitative check: 0.5% deep OTM beats SPY on annual
+    return and Sharpe, and improves max drawdown. Faster than the full
+    parametrized table and catches engine-side regressions that flip the
+    sign of the trade.
+    """
+    schema = options_data.schema
+
+    # SPY baseline
+    df = stocks_data._data.sort_values("date")
+    df = df[df["symbol"] == "SPY"]
+    series = df.set_index("date")["adjClose"]
+    years = (series.index[-1] - series.index[0]).days / 365.25
+    spy_annual = ((series.iloc[-1] / series.iloc[0]) ** (1 / years) - 1) * 100
+    spy_daily = series.pct_change().dropna()
+    spy_vol = spy_daily.std() * math.sqrt(252) * 100
+    spy_sharpe = spy_annual / spy_vol if spy_vol > 0 else 0.0
+    spy_cummax = series.cummax()
+    spy_max_dd = ((series - spy_cummax) / spy_cummax).min() * 100
+
+    # 0.5% Spitznagel overlay
+    balance = _run_spitznagel(options_data, stocks_data, schema, 0.005)
+    annual, max_dd, sharpe = _compute_stats(balance)
+
+    assert annual > spy_annual, (
+        f"0.5% Spitznagel annual ({annual:.2f}%) should exceed "
+        f"SPY annual ({spy_annual:.2f}%)"
+    )
+    assert sharpe > spy_sharpe, (
+        f"0.5% Spitznagel Sharpe ({sharpe:.3f}) should exceed "
+        f"SPY Sharpe ({spy_sharpe:.3f})"
+    )
+    assert max_dd > spy_max_dd, (  # less negative is better
+        f"0.5% Spitznagel max DD ({max_dd:.1f}%) should be less severe "
+        f"than SPY max DD ({spy_max_dd:.1f}%)"
+    )

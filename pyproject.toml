@@ -47,6 +47,7 @@ markers = [
     "bench: benchmark/property tests requiring explicit opt-in",
     "slow: full-range stress tests (17-year SPY, minutes to run)",
     "chaos: chaos / fault-injection tests",
+    "smoke: fast qualitative tests suitable for pre-commit / fast CI",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
 

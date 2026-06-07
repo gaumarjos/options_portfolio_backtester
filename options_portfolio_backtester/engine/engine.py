@@ -300,6 +300,27 @@ class BacktestEngine:
             check_exits_daily=check_exits_daily,
         )
 
+    def get_results(self, data_hash: str | None = None):
+        """Return a :class:`BacktestResults` bundling balance, trade log,
+        engine config, engine version, and an optional data hash. Call after
+        :meth:`run` to capture everything needed to reproduce or audit this
+        run.
+        """
+        from options_portfolio_backtester.results import BacktestResults
+        return BacktestResults(
+            balance=getattr(self, "balance", pd.DataFrame()),
+            trade_log=getattr(self, "trade_log", None),
+            config={
+                "allocation": dict(self.allocation),
+                "initial_capital": self.initial_capital,
+                "options_budget_pct": self.options_budget_pct,
+                "options_budget_annual_pct": self.options_budget_annual_pct,
+                "max_notional_pct": self.max_notional_pct,
+                "stop_if_broke": self.stop_if_broke,
+            },
+            data_hash=data_hash,
+        )
+
     def events_dataframe(self) -> pd.DataFrame:
         """Structured execution event log for debugging and audit.
 

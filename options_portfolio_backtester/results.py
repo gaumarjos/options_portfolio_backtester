@@ -1,0 +1,97 @@
+"""BacktestResults — a dataclass bundle of a backtest's outputs and metadata.
+
+The motivation: after ``BacktestEngine.run()`` finishes the engine instance
+holds ``balance``, ``trade_log``, etc., but downstream callers commonly need
+the *configuration* and *engine version* alongside those frames so they can
+audit reproductions or compare runs across engine releases. Without that
+metadata, saved results are ambiguous — "was this from before or after the
+budget-mode fix?" — and the answer requires off-band notes.
+
+``BacktestResults`` packages everything together. Use ``engine.get_results()``
+after ``engine.run()`` to capture it.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import math
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Optional
+
+import pandas as pd
+
+try:
+    from importlib.metadata import version
+    _PACKAGE_VERSION = version("options_portfolio_backtester")
+except Exception:  # pragma: no cover
+    _PACKAGE_VERSION = "unknown"
+
+
+@dataclass
+class BacktestResults:
+    """Bundle of a backtest run's outputs and the configuration that produced
+    them. Designed to be saved to disk (pickle / parquet split) and re-loaded
+    later without losing context about which engine version produced it."""
+
+    balance: pd.DataFrame
+    trade_log: Optional[pd.DataFrame]
+    config: dict[str, Any]
+    engine_version: str = field(default=_PACKAGE_VERSION)
+    data_hash: Optional[str] = None
+
+    # ---------------------------------------------------------------- properties
+    @property
+    def annual_return(self) -> float:
+        """Compound annual growth rate of ``total capital`` (percentage)."""
+        bal = self.balance["total capital"]
+        years = (bal.index[-1] - bal.index[0]).days / 365.25
+        if years <= 0:
+            return 0.0
+        return ((bal.iloc[-1] / bal.iloc[0]) ** (1 / years) - 1) * 100
+
+    @property
+    def max_drawdown(self) -> float:
+        """Worst peak-to-trough drawdown over the run (negative percentage)."""
+        bal = self.balance["total capital"]
+        cummax = bal.cummax()
+        return ((bal - cummax) / cummax).min() * 100
+
+    @property
+    def annualized_volatility(self) -> float:
+        """Annualized standard deviation of daily returns (percentage)."""
+        daily = self.balance["total capital"].pct_change().dropna()
+        return daily.std() * math.sqrt(252) * 100
+
+    @property
+    def sharpe_ratio(self) -> float:
+        """Sharpe assuming a 0% risk-free rate."""
+        vol = self.annualized_volatility
+        return self.annual_return / vol if vol > 0 else 0.0
+
+    def summary(self) -> dict[str, Any]:
+        """Headline metrics in a dict, handy for logging and assertions."""
+        return {
+            "annual_return": self.annual_return,
+            "max_drawdown": self.max_drawdown,
+            "volatility": self.annualized_volatility,
+            "sharpe": self.sharpe_ratio,
+            "trades": 0 if self.trade_log is None else len(self.trade_log),
+            "engine_version": self.engine_version,
+            "data_hash": self.data_hash,
+        }
+
+
+def hash_data_file(path: str | Path, chunk_size: int = 65536) -> str:
+    """SHA-256 of a file on disk, useful for ``BacktestResults.data_hash``.
+
+    Two backtests with the same engine version, the same config, and the
+    same ``data_hash`` should produce identical results — pinning all
+    three is the cleanest definition of "reproducible run" for this
+    framework.
+    """
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            h.update(chunk)
+    return h.hexdigest()

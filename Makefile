@@ -43,6 +43,9 @@ install-dev: ## Install local dev deps into active nix dev environment
 verify-articles: ## Reproduce all published-article tables and assert they still match
 	$(RUNCMD) $(PYTHON) -m pytest -v tests/test_article_reproduction.py
 
+verify-articles-smoke: ## Fast qualitative check (single budget, ~20s); suitable for pre-commit
+	$(RUNCMD) $(PYTHON) -m pytest -v tests/test_article_reproduction.py -k smoke
+
 compare-bt: ## Compare stock-only monthly rebalance vs bt library
 	$(RUNCMD) $(PYTHON) scripts/compare_with_bt.py
 

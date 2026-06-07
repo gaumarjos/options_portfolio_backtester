@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 from options_portfolio_backtester.core.types import Direction, OptionType
@@ -10,6 +11,77 @@ from options_portfolio_backtester.strategy.strategy_leg import StrategyLeg
 
 if TYPE_CHECKING:
     from options_portfolio_backtester.data.schema import Schema
+
+
+def deep_otm_put(
+    schema: "Schema",
+    underlying: str,
+    delta_range: tuple[float, float] = (-0.10, -0.02),
+    dte_range: tuple[int, int] = (90, 180),
+    dte_exit: int = 14,
+    direction: Direction = Direction.BUY,
+) -> Strategy:
+    """Build a deep-OTM put strategy — the canonical Spitznagel tail-hedge leg.
+
+    Default parameters match the configuration in the article at
+    https://federicocarrone.com/series/leptokurtic/the-tail-hedge-debate-spitznagel-is-right/:
+    delta in [-0.10, -0.02] (deep out of the money), DTE in [90, 180] at
+    entry, exit when DTE drops to 14 or below, monthly roll (set on the
+    engine, not here). The leg is sorted by delta ascending so the deepest
+    OTM contract within the band is picked first.
+
+    Compose this with ``BacktestEngine.use_external_budget(annual_pct)``
+    for the Spitznagel framing, or with ``use_allocation`` for the
+    allocation-reducing (AQR) framing.
+    """
+    leg = StrategyLeg("leg_1", schema, option_type=OptionType.PUT, direction=direction)
+    leg.entry_filter = (
+        (schema.underlying == underlying)
+        & (schema.dte >= dte_range[0])
+        & (schema.dte <= dte_range[1])
+        & (schema.delta >= delta_range[0])
+        & (schema.delta <= delta_range[1])
+    )
+    leg.entry_sort = ("delta", False)
+    leg.exit_filter = schema.dte <= dte_exit
+    strat = Strategy(schema)
+    strat.add_leg(leg)
+    strat.add_exit_thresholds(profit_pct=math.inf, loss_pct=math.inf)
+    return strat
+
+
+def near_atm_put_protection(
+    schema: "Schema",
+    underlying: str,
+    otm_pct: float = 5.0,
+    dte_range: tuple[int, int] = (28, 35),
+    dte_exit: int = 14,
+    direction: Direction = Direction.BUY,
+) -> Strategy:
+    """Build a near-ATM put-protection strategy — the configuration AQR /
+    Israelov actually test in 'Chasing Your Own Tail (Risk)' and
+    'Pathetic Protection'.
+
+    Default parameters: ~5% OTM puts (the CBOE PPUT index benchmark),
+    monthly DTE band, exit near expiry. These puts have the highest
+    theta decay and the lowest convexity per dollar — the opposite of
+    the Spitznagel configuration.
+    """
+    otm_lo = (otm_pct - 1.0) / 100
+    otm_hi = (otm_pct + 1.0) / 100
+    leg = StrategyLeg("leg_1", schema, option_type=OptionType.PUT, direction=direction)
+    leg.entry_filter = (
+        (schema.underlying == underlying)
+        & (schema.dte >= dte_range[0])
+        & (schema.dte <= dte_range[1])
+        & (schema.strike <= schema.underlying_last * (1 - otm_lo))
+        & (schema.strike >= schema.underlying_last * (1 - otm_hi))
+    )
+    leg.exit_filter = schema.dte <= dte_exit
+    strat = Strategy(schema)
+    strat.add_leg(leg)
+    strat.add_exit_thresholds(profit_pct=math.inf, loss_pct=math.inf)
+    return strat
 
 
 def strangle(

@@ -25,7 +25,12 @@ from options_portfolio_backtester.data.providers import (
 # Strategy
 from options_portfolio_backtester.strategy.strategy import Strategy
 from options_portfolio_backtester.strategy.strategy_leg import StrategyLeg
-from options_portfolio_backtester.strategy.presets import Strangle
+from options_portfolio_backtester.strategy.presets import (
+    Strangle, deep_otm_put, near_atm_put_protection,
+)
+
+# Results
+from options_portfolio_backtester.results import BacktestResults, hash_data_file
 
 # Execution
 from options_portfolio_backtester.execution.cost_model import (
@@ -64,6 +69,9 @@ __all__ = [
     "TiingoData", "HistoricalOptionsData",
     # Strategy
     "Strategy", "StrategyLeg", "Strangle",
+    "deep_otm_put", "near_atm_put_protection",
+    # Results
+    "BacktestResults", "hash_data_file",
     # Execution
     "NoCosts", "PerContractCommission", "TieredCommission", "SpreadSlippage",
     "MarketAtBidAsk", "MidPrice", "VolumeAwareFill",
