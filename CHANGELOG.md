@@ -24,6 +24,27 @@ anchored on the commit hash that introduced the change.
 ### Behavioral changes
 - *(none)*
 
+### Known bugs
+- **Budget-mode capital leak with non-deep-OTM puts.** When
+  ``options_budget_pct`` is set ("Spitznagel framing") and the leg
+  filter selects puts whose continuous mark-to-market value is
+  non-trivial (anything closer to ATM than ~deep OTM at delta
+  -0.10 to -0.02), the engine overstates the SPY share count
+  across rebalances. With near-ATM puts (delta -0.40 to -0.25) at
+  3.3% annual budget on the 17-year SPY data, final capital
+  inflates to ~$3.5 billion from $1 million starting capital;
+  deep OTM puts at the same budget produce ~$60 million, which is
+  on the order of what the published Spitznagel article
+  reproduces. Suspected location: ``rust/ob_core/src/backtest.rs``
+  ``rebalance_date!`` macro, around lines 425-500. Pinned by two
+  xfail tests in ``tests/test_known_bugs.py``; when a future
+  engine change closes the leak the strict-xfail will fail CI and
+  the fixer needs to move the tests into the regular suite.
+  Three prior commits (``523ba10``, ``5840620``, ``ffdfd1d``)
+  addressed adjacent variants of the same accounting class but
+  did not catch this one. Deep-OTM and SPY-only paths are not
+  affected — the published article's tables remain reliable.
+
 ### API changes
 - `BacktestEngine.use_external_budget(annual_pct)` and
   `BacktestEngine.use_allocation(stocks, options, cash)` —
