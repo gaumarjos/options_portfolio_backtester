@@ -1,7 +1,7 @@
 Options Portfolio Backtester
 ============================
 
-Backtest options strategies with realistic execution, Greeks-aware risk management, and contract-level inventory. Also handles equities and multi-asset portfolios. Optional Rust core for speed.
+Backtest options strategies with realistic execution, Greeks-aware risk management, and contract-level inventory. Also handles equities and multi-asset portfolios. Built on a Rust compute core.
 
 ## Get started
 
@@ -164,7 +164,7 @@ For the **Spitznagel leverage** model (`options_budget` parameter), options are 
 
 ## Rust acceleration
 
-Optional. Falls back to Python when not installed.
+Required: the backtest engine imports the Rust core at load time, so it must be built before use. There is no Python fallback.
 
 ```shell
 make rust-build
