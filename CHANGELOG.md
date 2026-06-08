@@ -22,28 +22,43 @@ anchored on the commit hash that introduced the change.
 ## Unreleased
 
 ### Behavioral changes
-- *(none)*
+- **Fix externally-funded exit accounting (the "free puts" bug).** In
+  externally-funded budget mode (``options_budget_pct`` or
+  ``options_budget_annual_pct`` set), ``execute_exits`` now subtracts
+  the entry cost from cash on exit. Before this change the engine
+  credited put proceeds in full but never debited the entry cost
+  anywhere, so every put trade contributed (proceeds) to cash instead
+  of (proceeds − cost) = realized P&L. Lifetime cash flow per trade
+  is now the realized P&L as it should be.
 
-### Known bugs
-- **Budget-mode capital leak with non-deep-OTM puts.** When
-  ``options_budget_pct`` is set ("Spitznagel framing") and the leg
-  filter selects puts whose continuous mark-to-market value is
-  non-trivial (anything closer to ATM than ~deep OTM at delta
-  -0.10 to -0.02), the engine overstates the SPY share count
-  across rebalances. With near-ATM puts (delta -0.40 to -0.25) at
-  3.3% annual budget on the 17-year SPY data, final capital
-  inflates to ~$3.5 billion from $1 million starting capital;
-  deep OTM puts at the same budget produce ~$60 million, which is
-  on the order of what the published Spitznagel article
-  reproduces. Suspected location: ``rust/ob_core/src/backtest.rs``
-  ``rebalance_date!`` macro, around lines 425-500. Pinned by two
-  xfail tests in ``tests/test_known_bugs.py``; when a future
-  engine change closes the leak the strict-xfail will fail CI and
-  the fixer needs to move the tests into the regular suite.
-  Three prior commits (``523ba10``, ``5840620``, ``ffdfd1d``)
-  addressed adjacent variants of the same accounting class but
-  did not catch this one. Deep-OTM and SPY-only paths are not
-  affected — the published article's tables remain reliable.
+  Effect on published reproductions: the Spitznagel deep-OTM table
+  in ``tests/test_article_reproduction.py`` shifts substantially.
+  At 0.5% per-rebalance budget on the 17-year SPY data, annual
+  return drops from 13.54% to 10.52%; at 1.0% from 16.29% to 10.11%;
+  at 2.0% from 21.34% to 8.71%; at 3.3% from 27.23% to 5.81%. The
+  qualitative shape — Sharpe peaks at the lowest budgets and
+  degrades monotonically as budget grows — survives the fix.
+
+  Also resolves what was previously documented as "Budget-mode
+  capital leak with non-deep-OTM puts" in this CHANGELOG. The
+  near-ATM 3.3%-per-rebalance "$3.5B from $1M" case was an
+  amplified-by-time symptom of the same exit accounting bug, plus
+  the per-rebalance interpretation of ``options_budget_pct`` being
+  treated as if it were annual (3.3% per month is ~40%/yr of
+  premium spend, not 3.3%/yr). Documented in
+  ``docs/PRE_FIX_REGIME_SWEEP.md`` and ``docs/POST_FIX_REGIME_SWEEP.md``.
+  ``tests/test_known_bugs.py`` removed.
+
+### Budget API clarification
+- ``options_budget_pct`` is **per-rebalance**, not annual. On monthly
+  rebalancing, ``options_budget_pct = 0.033`` means 3.3% of NAV
+  spent on options each month (~40%/yr of premium), not 3.3%/yr.
+  Use ``options_budget_annual_pct`` if you want true annual
+  semantics, which is what most of the tail-hedge literature
+  (including Spitznagel's *Safe Haven*) actually describes. The
+  README's first-backtest example and ``BacktestEngine.use_external_budget``
+  already use annual semantics. ``docs/POST_FIX_ANNUAL_SWEEP.md``
+  reports the regime sweep at true-annual semantics for comparison.
 
 ### API changes
 - `BacktestEngine.use_external_budget(annual_pct)` and

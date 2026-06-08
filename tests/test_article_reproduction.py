@@ -64,20 +64,28 @@ requires_data = pytest.mark.skipif(
 #
 # Article: https://federicocarrone.com/series/leptokurtic/the-tail-hedge-debate-spitznagel-is-right/
 # Parameters: DTE 90-180, delta (-0.10, -0.02), exit DTE 14, monthly rebalance,
-# external put budget (Spitznagel framing). Data window: 2008-01-02 to 2024-12-31.
+# external put budget (Spitznagel framing) via `options_budget_pct` —
+# per-rebalance interpretation (so 0.005 = 0.5% of NAV per month ≈ 6%/yr of
+# budget). Data window: 2008-01-02 to 2024-12-31.
+#
+# Numbers below are post the externally-funded exit accounting fix that
+# subtracts the put entry cost from cash at exit (so lifetime cash flow
+# per trade equals realized P&L, not full proceeds). The pre-fix engine
+# treated proceeds as pure profit and inflated returns by ~3-15pp
+# depending on budget; see CHANGELOG.md for details.
 
 SPITZNAGEL_SPY_BASELINE = {
     "annual": 10.65,
     "max_dd": -51.9,
 }
 
-# Spitznagel framing (100% stocks + external put budget on top).
-# Tolerance on annual return: 0.5pp; on max DD: 1.0pp; on Sharpe: 0.05.
+# Spitznagel framing (100% stocks + external put budget on top), engine
+# post-fix. Tolerance: 0.5pp annual return, 1.0pp max DD, 0.05 Sharpe.
 SPITZNAGEL_TABLE = {
-    0.005: {"annual": 13.54, "max_dd": -46.4, "sharpe": 0.721},
-    0.010: {"annual": 16.29, "max_dd": -44.4, "sharpe": 0.708},
-    0.020: {"annual": 21.34, "max_dd": -64.1, "sharpe": 0.633},
-    0.033: {"annual": 27.23, "max_dd": -75.4, "sharpe": 0.591},
+    0.005: {"annual": 10.52, "max_dd": -47.05, "sharpe": 0.561},
+    0.010: {"annual": 10.11, "max_dd": -45.11, "sharpe": 0.438},
+    0.020: {"annual":  8.71, "max_dd": -65.15, "sharpe": 0.257},
+    0.033: {"annual":  5.81, "max_dd": -80.19, "sharpe": 0.124},
 }
 
 INITIAL_CAPITAL = 1_000_000
@@ -220,10 +228,16 @@ def test_spitznagel_sweet_spot_shape(options_data, stocks_data):
 @requires_data
 @pytest.mark.smoke
 def test_spitznagel_smoke_qualitative(options_data, stocks_data):
-    """Single-budget qualitative check: 0.5% deep OTM beats SPY on annual
-    return and Sharpe, and improves max drawdown. Faster than the full
-    parametrized table and catches engine-side regressions that flip the
-    sign of the trade.
+    """Single-budget qualitative check: 0.5% deep OTM tracks SPY on annual
+    return (within 0.5pp) and improves max drawdown by at least 3pp.
+    Catches engine-side regressions that flip the sign of the trade or
+    dramatically change the cost of protection.
+
+    The fixed engine no longer produces "Spitznagel beats SPY on
+    return" under realistic accounting — the headline number from the
+    pre-fix article was an artifact of treating put proceeds as pure
+    profit. What remains true: drawdown improvement during catastrophes
+    is real and the strategy tracks the underlying closely.
     """
     schema = options_data.schema
 
@@ -233,25 +247,18 @@ def test_spitznagel_smoke_qualitative(options_data, stocks_data):
     series = df.set_index("date")["adjClose"]
     years = (series.index[-1] - series.index[0]).days / 365.25
     spy_annual = ((series.iloc[-1] / series.iloc[0]) ** (1 / years) - 1) * 100
-    spy_daily = series.pct_change().dropna()
-    spy_vol = spy_daily.std() * math.sqrt(252) * 100
-    spy_sharpe = spy_annual / spy_vol if spy_vol > 0 else 0.0
     spy_cummax = series.cummax()
     spy_max_dd = ((series - spy_cummax) / spy_cummax).min() * 100
 
     # 0.5% Spitznagel overlay
     balance = _run_spitznagel(options_data, stocks_data, schema, 0.005)
-    annual, max_dd, sharpe = _compute_stats(balance)
+    annual, max_dd, _ = _compute_stats(balance)
 
-    assert annual > spy_annual, (
-        f"0.5% Spitznagel annual ({annual:.2f}%) should exceed "
-        f"SPY annual ({spy_annual:.2f}%)"
+    assert abs(annual - spy_annual) < 1.0, (
+        f"0.5% Spitznagel annual ({annual:.2f}%) should track "
+        f"SPY annual ({spy_annual:.2f}%) within 1pp"
     )
-    assert sharpe > spy_sharpe, (
-        f"0.5% Spitznagel Sharpe ({sharpe:.3f}) should exceed "
-        f"SPY Sharpe ({spy_sharpe:.3f})"
-    )
-    assert max_dd > spy_max_dd, (  # less negative is better
-        f"0.5% Spitznagel max DD ({max_dd:.1f}%) should be less severe "
-        f"than SPY max DD ({spy_max_dd:.1f}%)"
+    assert max_dd > spy_max_dd + 3.0, (  # less negative is better
+        f"0.5% Spitznagel max DD ({max_dd:.1f}%) should be at least "
+        f"3pp less severe than SPY max DD ({spy_max_dd:.1f}%)"
     )

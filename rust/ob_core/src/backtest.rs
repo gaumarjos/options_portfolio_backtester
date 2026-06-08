@@ -409,6 +409,8 @@ pub fn run_backtest_with_filters(
             let day_stocks = $partitioned.stocks.get(&rb_date);
 
             // Run exit filters
+            let externally_funded = $config.options_budget_pct.is_some()
+                || $config.options_budget_annual_pct.is_some();
             execute_exits(
                 &mut $positions, &mut $cash, day_opts,
                 $config.shares_per_contract,
@@ -416,6 +418,7 @@ pub fn run_backtest_with_filters(
                 $config.profit_pct, $config.loss_pct,
                 $schema, rb_date, &mut $trade_rows,
                 &$config.cost_model, day_stocks,
+                externally_funded,
             )?;
 
             // Recompute portfolio greeks from current market data after exits
@@ -527,6 +530,8 @@ pub fn run_backtest_with_filters(
                 if let Some(day_opts) = partitioned.options.get(&date) {
                     let day_stocks = partitioned.stocks.get(&date);
                     let cash_before = cash;
+                    let externally_funded = config.options_budget_pct.is_some()
+                        || config.options_budget_annual_pct.is_some();
                     execute_exits(
                         &mut positions, &mut cash, day_opts,
                         config.shares_per_contract,
@@ -534,6 +539,7 @@ pub fn run_backtest_with_filters(
                         config.profit_pct, config.loss_pct,
                         schema, date, &mut trade_rows,
                         &config.cost_model, day_stocks,
+                        externally_funded,
                     )?;
 
                     // Immediately reinvest freed cash into stocks
@@ -704,6 +710,8 @@ pub fn run_multi_strategy(
             let day_stocks = partitioned.stocks.get(&date);
 
             // Phase 1: exits for rebalancing slots
+            let externally_funded_phase1 = config.options_budget_pct.is_some()
+                || config.options_budget_annual_pct.is_some();
             for &si in &slots_rebalancing {
                 execute_exits(
                     &mut slot_positions[si], &mut cash, day_opts,
@@ -712,6 +720,7 @@ pub fn run_multi_strategy(
                     slots[si].profit_pct, slots[si].loss_pct,
                     schema, date, &mut trade_rows,
                     &config.cost_model, day_stocks,
+                    externally_funded_phase1,
                 )?;
             }
 
@@ -813,6 +822,8 @@ pub fn run_multi_strategy(
                     if (slot.check_exits_daily || config.check_exits_daily)
                         && !slot_positions[si].is_empty()
                     {
+                        let externally_funded_phase2 = config.options_budget_pct.is_some()
+                            || config.options_budget_annual_pct.is_some();
                         execute_exits(
                             &mut slot_positions[si], &mut cash, day_opts,
                             config.shares_per_contract,
@@ -820,6 +831,7 @@ pub fn run_multi_strategy(
                             slot.profit_pct, slot.loss_pct,
                             schema, date, &mut trade_rows,
                             &config.cost_model, day_stocks,
+                            externally_funded_phase2,
                         )?;
                     }
                 }
@@ -1070,6 +1082,7 @@ fn execute_exits(
     trade_rows: &mut Vec<TradeRow>,
     cost_model: &CostModel,
     day_stocks: Option<&DayStocks>,
+    externally_funded: bool,
 ) -> PolarsResult<()> {
     let mut to_remove = Vec::new();
 
@@ -1110,6 +1123,15 @@ fn execute_exits(
         if should_exit {
             let exit_cost = compute_position_exit_cost(pos, day_opts, spc, day_stocks);
             *cash -= exit_cost * pos.quantity;
+
+            // Externally-funded mode: the entry cost was supplied by the
+            // external budget and never debited from portfolio cash. To
+            // keep lifetime cash flow honest, return the entry cost out
+            // of proceeds now — what stays in cash is realized P&L
+            // (proceeds − cost), not the full sale value.
+            if externally_funded {
+                *cash -= pos.entry_cost * pos.quantity;
+            }
 
             // Apply exit commission
             let commission = cost_model.option_cost(
