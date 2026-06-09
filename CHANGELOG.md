@@ -49,6 +49,54 @@ anchored on the commit hash that introduced the change.
   ``docs/PRE_FIX_REGIME_SWEEP.md`` and ``docs/POST_FIX_REGIME_SWEEP.md``.
   ``tests/test_known_bugs.py`` removed.
 
+- **Option intrinsic value now uses the unadjusted close (valuation
+  bug B).** When a contract is not quoted on a given day (expired or
+  missing from the chain), the engine falls back to the option's
+  intrinsic value. Previously it computed intrinsic from the
+  dividend-*adjusted* close (``stocks_price`` → ``adjClose``) against
+  the raw (unadjusted) strike. Because adjusted closes are lower than
+  raw closes in the past, this manufactured phantom intrinsic value
+  for any expired put whose strike sat inside the adjustment gap. The
+  engine now carries the unadjusted close (``close``) alongside the
+  adjusted close and uses it for intrinsic value; stock capital / P&L
+  still uses the adjusted close. A missing spot now yields $0 intrinsic
+  (untradeable) rather than ``strike`` from a 0.0 spot. New
+  ``stocks_unadj_price`` schema key (defaults to ``adjClose`` for
+  back-compat). Unlike the cash-flow fix above, this is a *valuation*
+  bug: both the exit proceeds and the held mark-to-market used the same
+  wrong number, so the books stayed balanced — a cash-conservation
+  check cannot see it, which is why it needs its own guard.
+
+  Effect: configurations that let contracts reach the intrinsic
+  fallback (profit-taking, shorter DTE, closer-to-ATM puts, or any run
+  with ``check_exits_daily=False``) lose phantom value. The article's
+  deep-OTM 90-180 DTE config exits at real bids near DTE 14, so its
+  numbers are largely unaffected.
+
+- **``test_article_reproduction.py`` moved to true-annual budget
+  framing.** The reproduction now configures the put overlay with
+  ``options_budget_annual_pct`` (and ``check_exits_daily=True``), matching
+  the article's "X%/yr" language and ``use_external_budget``, instead of
+  the per-rebalance ``options_budget_pct``. Under the corrected engine
+  the deep-OTM overlay TRACKS SPY with a small monotonic premium drag
+  and Sharpe ≈ buy-and-hold; the earlier "overlay beats SPY / Sharpe
+  sweet spot" result was an artifact of the two bugs above. Re-pinned
+  table (annual budget, 2008-2024): 0.5%/yr 10.50%, 1.0%/yr 10.34%,
+  2.0%/yr 9.99%, 3.3%/yr 9.52% (SPY buy-and-hold 10.65%); full-period
+  max drawdown is essentially unchanged from SPY (≈ −51.9%) at these
+  budgets. The ``test_spitznagel_sweet_spot_shape`` test is replaced by
+  ``test_spitznagel_monotone_drag_and_tracking``.
+
+### Bug fixes
+- **``check_exits_daily`` set as an attribute is now honored.** It was
+  only a ``run()`` parameter (default ``False``); assigning
+  ``engine.check_exits_daily = True`` silently did nothing because
+  ``run()`` never read it. ``BacktestEngine`` now has a
+  ``check_exits_daily`` attribute and ``run(check_exits_daily=None)``
+  falls back to it, so the attribute and the explicit argument agree
+  (the argument still overrides per-run). The global default remains
+  ``False``.
+
 ### Budget API clarification
 - ``options_budget_pct`` is **per-rebalance**, not annual. On monthly
   rebalancing, ``options_budget_pct = 0.033`` means 3.3% of NAV

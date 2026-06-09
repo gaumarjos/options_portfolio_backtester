@@ -263,12 +263,26 @@ impl DayOptions {
 
 /// Stocks data for a single date — O(1) price lookups.
 struct DayStocks {
+    /// Adjusted close (total-return) prices — used for stock capital / P&L.
     prices: HashMap<String, f64>,
+    /// Unadjusted close prices — used for option intrinsic value, since
+    /// option strikes are raw (unadjusted) prices. Mixing adjusted spot
+    /// with raw strikes manufactures phantom intrinsic value for expired
+    /// contracts (the dividend-adjustment gap), which is bug class B.
+    unadj_prices: HashMap<String, f64>,
 }
 
 impl DayStocks {
     fn get_price(&self, symbol: &str) -> Option<f64> {
         self.prices.get(symbol).copied()
+    }
+
+    /// Unadjusted spot for intrinsic-value calculations. Falls back to the
+    /// adjusted price if no unadjusted column was supplied (back-compat).
+    fn get_unadj_price(&self, symbol: &str) -> Option<f64> {
+        self.unadj_prices.get(symbol)
+            .or_else(|| self.prices.get(symbol))
+            .copied()
     }
 }
 
@@ -288,6 +302,9 @@ pub struct SchemaMapping {
     pub stocks_date: String,
     pub stocks_sym: String,
     pub stocks_price: String,
+    /// Unadjusted close column, used only for option intrinsic value.
+    /// Defaults to the adjusted price column when not supplied.
+    pub stocks_unadj_price: String,
     pub underlying: String,
     pub expiration: String,
     pub option_type: String,
@@ -921,7 +938,7 @@ fn compute_balance_period_multi(
                         let price = opts.get_f64(&pos.leg_contracts[j], exit_price_col)
                             .unwrap_or_else(|| {
                                 let spot = day_stocks
-                                    .and_then(|ds| ds.get_price(&pos.leg_underlyings[j]))
+                                    .and_then(|ds| ds.get_unadj_price(&pos.leg_underlyings[j]))
                                     .unwrap_or(0.0);
                                 intrinsic_value(&pos.leg_types[j], pos.leg_strikes[j], spot)
                             });
@@ -1043,6 +1060,15 @@ pub fn prepartition_data(
     let price_raw = stocks_data.column(price_col_name)?;
     let price_casted = price_raw.cast(&DataType::Float64)?;
     let price_ca = price_casted.f64()?;
+    // Unadjusted close for intrinsic value. Falls back to the adjusted price
+    // column if the unadjusted column is absent (older callers / data without
+    // a raw close), preserving prior behavior in that case.
+    let unadj_col_name = &schema.stocks_unadj_price;
+    let unadj_casted = stocks_data
+        .column(unadj_col_name)
+        .unwrap_or(price_raw)
+        .cast(&DataType::Float64)?;
+    let unadj_ca = unadj_casted.f64()?;
     let n_stocks = stocks_data.height();
 
     let mut stocks_map: HashMap<i64, DayStocks> = HashMap::with_capacity(512);
@@ -1050,10 +1076,15 @@ pub fn prepartition_data(
     for i in 0..n_stocks {
         let date_ns = extract_date_ns(stocks_date_series, i);
         if let (Some(sym), Some(price)) = (sym_ca.get(i), price_ca.get(i)) {
-            stocks_map.entry(date_ns)
-                .or_insert_with(|| DayStocks { prices: HashMap::new() })
-                .prices
-                .insert(sym.to_string(), price);
+            let entry = stocks_map.entry(date_ns)
+                .or_insert_with(|| DayStocks {
+                    prices: HashMap::new(),
+                    unadj_prices: HashMap::new(),
+                });
+            entry.prices.insert(sym.to_string(), price);
+            if let Some(unadj) = unadj_ca.get(i) {
+                entry.unadj_prices.insert(sym.to_string(), unadj);
+            }
         }
     }
 
@@ -1146,7 +1177,7 @@ fn execute_exits(
                 let price = day_opts.get_f64(&pos.leg_contracts[j], exit_price_col)
                     .unwrap_or_else(|| {
                         let spot = day_stocks
-                            .and_then(|ds| ds.get_price(&pos.leg_underlyings[j]))
+                            .and_then(|ds| ds.get_unadj_price(&pos.leg_underlyings[j]))
                             .unwrap_or(0.0);
                         intrinsic_value(&pos.leg_types[j], pos.leg_strikes[j], spot)
                     });
@@ -1218,7 +1249,7 @@ fn liquidate_all_positions(
             let price = day_opts.get_f64(&pos.leg_contracts[j], exit_price_col)
                 .unwrap_or_else(|| {
                     let spot = day_stocks
-                        .and_then(|ds| ds.get_price(&pos.leg_underlyings[j]))
+                        .and_then(|ds| ds.get_unadj_price(&pos.leg_underlyings[j]))
                         .unwrap_or(0.0);
                     intrinsic_value(&pos.leg_types[j], pos.leg_strikes[j], spot)
                 });
@@ -1539,7 +1570,7 @@ fn compute_balance_period(
                     let price = opts.get_f64(&pos.leg_contracts[j], exit_price_col)
                         .unwrap_or_else(|| {
                             let spot = day_stocks
-                                .and_then(|ds| ds.get_price(&pos.leg_underlyings[j]))
+                                .and_then(|ds| ds.get_unadj_price(&pos.leg_underlyings[j]))
                                 .unwrap_or(0.0);
                             intrinsic_value(&pos.leg_types[j], pos.leg_strikes[j], spot)
                         });
@@ -1746,6 +1777,12 @@ fn build_result(
 /// Compute intrinsic value of an option: max(0, strike - spot) for puts,
 /// max(0, spot - strike) for calls.
 fn intrinsic_value(opt_type: &str, strike: f64, underlying_price: f64) -> f64 {
+    // No (or non-positive) spot means the underlying price is unavailable for
+    // this contract/date — treat the option as worthless rather than letting a
+    // 0.0 spot manufacture intrinsic value equal to the strike (bug class B).
+    if !(underlying_price > 0.0) {
+        return 0.0;
+    }
     if opt_type == "call" {
         (underlying_price - strike).max(0.0)
     } else {
@@ -1761,7 +1798,7 @@ fn compute_position_exit_cost(pos: &Position, day_opts: &DayOptions, spc: i64, d
         let price = day_opts.get_f64(contract, dir.invert().price_column())
             .unwrap_or_else(|| {
                 let spot = day_stocks
-                    .and_then(|ds| ds.get_price(&pos.leg_underlyings[i]))
+                    .and_then(|ds| ds.get_unadj_price(&pos.leg_underlyings[i]))
                     .unwrap_or(0.0);
                 intrinsic_value(&pos.leg_types[i], pos.leg_strikes[i], spot)
             });
@@ -1943,7 +1980,8 @@ mod tests {
 
         let mut prices = HashMap::new();
         prices.insert("SPY".to_string(), 380.0);
-        let day_stocks = DayStocks { prices };
+        // Empty unadj_prices → get_unadj_price falls back to `prices`.
+        let day_stocks = DayStocks { prices, unadj_prices: HashMap::new() };
 
         // Sell direction → exit price col is "ask" (invert of Sell = Buy → price_column = "ask")
         // cash_sign for Sell = +1

@@ -21,6 +21,7 @@ pub fn parse_schema(schema: &Bound<'_, PyDict>) -> PyResult<SchemaMapping> {
         stocks_date: get_str(schema, "stocks_date", "date")?,
         stocks_sym: get_str(schema, "stocks_symbol", "symbol")?,
         stocks_price: get_str(schema, "stocks_price", "adjClose")?,
+        stocks_unadj_price: get_str(schema, "stocks_unadj_price", "adjClose")?,
         underlying: get_str(schema, "underlying", "underlying")?,
         expiration: get_str(schema, "expiration", "expiration")?,
         option_type: get_str(schema, "type", "type")?,
