@@ -116,6 +116,10 @@ class BacktestEngine:
         # attribute so `engine.check_exits_daily = True` is honored rather than
         # silently ignored.
         self.check_exits_daily: bool = False
+        # Immediately redeploy freed cash into stocks after a daily option exit
+        # (monetize-and-reinvest), instead of waiting for the next rebalance
+        # date. Requires check_exits_daily=True to have any effect.
+        self.rebalance_stocks_on_exit: bool = False
         # Enable runtime self-checks (cash-flow + valuation invariants) in the
         # Rust engine. Off by default; intended for tests/debugging.
         self.assert_invariants: bool = False
@@ -520,6 +524,7 @@ class BacktestEngine:
             "stop_if_broke": self.stop_if_broke,
             "max_notional_pct": self.max_notional_pct,
             "check_exits_daily": check_exits_daily,
+            "rebalance_stocks_on_exit": self.rebalance_stocks_on_exit,
             "assert_invariants": self.assert_invariants,
         }
 
@@ -706,6 +711,7 @@ class BacktestEngine:
             "stop_if_broke": self.stop_if_broke,
             "max_notional_pct": self.max_notional_pct,
             "check_exits_daily": check_exits_daily,
+            "rebalance_stocks_on_exit": self.rebalance_stocks_on_exit,
             "assert_invariants": self.assert_invariants,
         }
 

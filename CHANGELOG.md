@@ -96,6 +96,12 @@ anchored on the commit hash that introduced the change.
   falls back to it, so the attribute and the explicit argument agree
   (the argument still overrides per-run). The global default remains
   ``False``.
+- **`rebalance_stocks_on_exit` is now reachable from Python.** The Rust
+  core already supported redeploying freed cash into stocks immediately
+  after a daily option exit (monetize-and-reinvest), but the flag was
+  never passed through from `BacktestEngine`, so it was dead. Exposed as
+  `BacktestEngine.rebalance_stocks_on_exit` (default ``False``; only
+  meaningful with `check_exits_daily=True`).
 
 ### Invariants / defense-in-depth
 - **Optional runtime self-checks (`assert_invariants`).** New
