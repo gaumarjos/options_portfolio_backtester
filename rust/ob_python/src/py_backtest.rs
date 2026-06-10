@@ -263,6 +263,12 @@ pub fn parse_config_from_dict(config: &Bound<'_, PyDict>) -> PyResult<BacktestCo
         .transpose()?
         .unwrap_or(false);
 
+    let assert_invariants: bool = config
+        .get_item("assert_invariants")?
+        .map(|v| v.extract::<bool>())
+        .transpose()?
+        .unwrap_or(false);
+
     Ok(BacktestConfig {
         allocation_stocks: alloc_stocks,
         allocation_options: alloc_options,
@@ -287,6 +293,7 @@ pub fn parse_config_from_dict(config: &Bound<'_, PyDict>) -> PyResult<BacktestCo
         check_exits_daily,
         options_budget_fresh_spend,
         rebalance_stocks_on_exit,
+        assert_invariants,
     })
 }
 

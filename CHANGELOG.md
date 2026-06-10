@@ -97,6 +97,26 @@ anchored on the commit hash that introduced the change.
   (the argument still overrides per-run). The global default remains
   ``False``.
 
+### Invariants / defense-in-depth
+- **Optional runtime self-checks (`assert_invariants`).** New
+  `BacktestEngine.assert_invariants` attribute (and `assert_invariants`
+  config key; default ``False``, zero cost when off) turns on two
+  in-engine guards that fail the run loudly on violation:
+  - *Class A — cash flow:* on every option exit, the change in portfolio
+    cash must equal realized P&L net of commission, computed
+    independently of the mutation. Catches the "free puts" regression
+    (crediting full proceeds without returning the externally-funded
+    entry cost). A cash-conservation check is the right shape for this
+    class — a per-trade cash-flow bug unbalances the ledger.
+  - *Class B — valuation:* when an unquoted (expired/missing) contract
+    falls back to intrinsic value, that value must equal the
+    unadjusted-spot intrinsic, recomputed independently. Catches a
+    regression back to the adjusted close. A cash check cannot see this
+    class — both proceeds and mark use the same wrong price, so the
+    ledger stays balanced; it needs its own valuation guard.
+  Exercised by ``tests/bench/test_invariants.py::TestRuntimeInvariantChecks``
+  across the budget configurations where both bugs originally lived.
+
 ### Budget API clarification
 - ``options_budget_pct`` is **per-rebalance**, not annual. On monthly
   rebalancing, ``options_budget_pct = 0.033`` means 3.3% of NAV

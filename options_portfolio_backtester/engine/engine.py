@@ -116,6 +116,9 @@ class BacktestEngine:
         # attribute so `engine.check_exits_daily = True` is honored rather than
         # silently ignored.
         self.check_exits_daily: bool = False
+        # Enable runtime self-checks (cash-flow + valuation invariants) in the
+        # Rust engine. Off by default; intended for tests/debugging.
+        self.assert_invariants: bool = False
 
         self.options_budget_pct: float | None = None
         self.options_budget_annual_pct: float | None = None
@@ -517,6 +520,7 @@ class BacktestEngine:
             "stop_if_broke": self.stop_if_broke,
             "max_notional_pct": self.max_notional_pct,
             "check_exits_daily": check_exits_daily,
+            "assert_invariants": self.assert_invariants,
         }
 
         schema_mapping = {
@@ -702,6 +706,7 @@ class BacktestEngine:
             "stop_if_broke": self.stop_if_broke,
             "max_notional_pct": self.max_notional_pct,
             "check_exits_daily": check_exits_daily,
+            "assert_invariants": self.assert_invariants,
         }
 
         schema_mapping = {

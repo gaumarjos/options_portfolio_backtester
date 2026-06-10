@@ -66,6 +66,11 @@ pub struct BacktestConfig {
     /// When true, rebalance stocks immediately after daily option exits.
     /// Allows reinvesting put profits into stocks without waiting for the next rebalance date.
     pub rebalance_stocks_on_exit: bool,
+    /// When true, run runtime self-checks (cash-flow and valuation invariants)
+    /// during the backtest and fail loudly if they are violated. Off by default
+    /// — intended for tests and debugging, not production runs. See
+    /// `check_cashflow_invariant` and `check_valuation_envelope`.
+    pub assert_invariants: bool,
 }
 
 pub struct BacktestResult {
@@ -436,6 +441,7 @@ pub fn run_backtest_with_filters(
                 $schema, rb_date, &mut $trade_rows,
                 &$config.cost_model, day_stocks,
                 externally_funded,
+                $config.assert_invariants,
             )?;
 
             // Recompute portfolio greeks from current market data after exits
@@ -557,6 +563,7 @@ pub fn run_backtest_with_filters(
                         schema, date, &mut trade_rows,
                         &config.cost_model, day_stocks,
                         externally_funded,
+                        config.assert_invariants,
                     )?;
 
                     // Immediately reinvest freed cash into stocks
@@ -738,6 +745,7 @@ pub fn run_multi_strategy(
                     schema, date, &mut trade_rows,
                     &config.cost_model, day_stocks,
                     externally_funded_phase1,
+                    config.assert_invariants,
                 )?;
             }
 
@@ -849,6 +857,7 @@ pub fn run_multi_strategy(
                             schema, date, &mut trade_rows,
                             &config.cost_model, day_stocks,
                             externally_funded_phase2,
+                            config.assert_invariants,
                         )?;
                     }
                 }
@@ -1114,6 +1123,7 @@ fn execute_exits(
     cost_model: &CostModel,
     day_stocks: Option<&DayStocks>,
     externally_funded: bool,
+    assert_invariants: bool,
 ) -> PolarsResult<()> {
     let mut to_remove = Vec::new();
 
@@ -1152,6 +1162,7 @@ fn execute_exits(
         }
 
         if should_exit {
+            let cash_before = *cash;
             let exit_cost = compute_position_exit_cost(pos, day_opts, spc, day_stocks);
             *cash -= exit_cost * pos.quantity;
 
@@ -1170,17 +1181,57 @@ fn execute_exits(
             );
             *cash -= commission;
 
+            // Class-A cash-flow invariant (bug class A — see CHANGELOG): the
+            // cash the portfolio receives on exit must equal realized P&L net
+            // of commission, NOT the full sale proceeds. `expected` is written
+            // independently of the mutations above, so a future change that
+            // drops the externally-funded basis return (the original "free
+            // puts" bug) makes `actual` diverge and fails the run loudly.
+            if assert_invariants {
+                let proceeds = -exit_cost * pos.quantity;
+                let basis_return = if externally_funded { pos.entry_cost * pos.quantity } else { 0.0 };
+                let expected = proceeds - basis_return - commission;
+                let actual = *cash - cash_before;
+                if (actual - expected).abs() > 1e-6 * (1.0 + expected.abs()) {
+                    return Err(PolarsError::ComputeError(format!(
+                        "cash-flow invariant (class A) violated on exit at date {date}: \
+                         Δcash {actual:.6} != realized P&L net commission {expected:.6} \
+                         (externally_funded={externally_funded})"
+                    ).into()));
+                }
+            }
+
             // Build trade row for exit
             let mut leg_data = Vec::new();
             for (j, leg) in legs.iter().enumerate() {
                 let exit_price_col = leg.direction.invert().price_column();
-                let price = day_opts.get_f64(&pos.leg_contracts[j], exit_price_col)
-                    .unwrap_or_else(|| {
-                        let spot = day_stocks
-                            .and_then(|ds| ds.get_unadj_price(&pos.leg_underlyings[j]))
-                            .unwrap_or(0.0);
-                        intrinsic_value(&pos.leg_types[j], pos.leg_strikes[j], spot)
-                    });
+                let quoted = day_opts.get_f64(&pos.leg_contracts[j], exit_price_col);
+                let price = quoted.unwrap_or_else(|| {
+                    let spot = day_stocks
+                        .and_then(|ds| ds.get_unadj_price(&pos.leg_underlyings[j]))
+                        .unwrap_or(0.0);
+                    intrinsic_value(&pos.leg_types[j], pos.leg_strikes[j], spot)
+                });
+
+                // Class-B valuation invariant (bug class B — see CHANGELOG):
+                // when the contract is NOT quoted we fall back to intrinsic
+                // value, which MUST be computed from the unadjusted spot (raw
+                // strikes vs adjusted spot manufactured phantom value). Recompute
+                // it here independently and confirm the price used matches —
+                // a regression back to the adjusted close makes them diverge.
+                if assert_invariants && quoted.is_none() {
+                    let unadj_spot = day_stocks
+                        .and_then(|ds| ds.get_unadj_price(&pos.leg_underlyings[j]))
+                        .unwrap_or(0.0);
+                    let expected = intrinsic_value(&pos.leg_types[j], pos.leg_strikes[j], unadj_spot);
+                    if price < -1e-9 || (price - expected).abs() > 1e-6 * (1.0 + expected.abs()) {
+                        return Err(PolarsError::ComputeError(format!(
+                            "valuation invariant (class B) violated at date {date}: \
+                             unquoted contract {} marked at {price:.6}, expected unadjusted \
+                             intrinsic {expected:.6}", pos.leg_contracts[j]
+                        ).into()));
+                    }
+                }
                 // Cash flow sign: BUY receives (-1), SELL pays (+1)
                 let cash_sign = if leg.direction == Direction::Buy { -1.0 } else { 1.0 };
                 let cost = cash_sign * price * spc as f64;
