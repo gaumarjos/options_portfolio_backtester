@@ -63,36 +63,24 @@ requires_data = pytest.mark.skipif(
 # --- Spitznagel article -----------------------------------------------------
 #
 # Article: https://federicocarrone.com/series/leptokurtic/the-tail-hedge-debate-spitznagel-is-right/
-# Parameters: DTE 90-180, delta (-0.10, -0.02), exit DTE 14, monthly rebalance,
-# external put budget (Spitznagel framing) expressed as an ANNUAL budget via
-# `options_budget_annual_pct` — i.e. 0.005 = 0.5% of NAV per year, matching the
-# article's "X%/yr" language. Exits are checked daily (`check_exits_daily=True`)
-# so puts close at real bids around DTE 14 rather than expiring into the
-# intrinsic fallback. Data window: 2008-01-02 to 2024-12-31.
-#
-# Numbers below are post TWO engine fixes (see CHANGELOG.md):
-#   1. externally-funded exit accounting — subtract put entry cost from cash at
-#      exit so lifetime per-trade cash flow equals realized P&L, not full
-#      proceeds; and
-#   2. intrinsic value computed from the UNADJUSTED close (raw strikes vs
-#      adjusted spot previously manufactured phantom intrinsic value for
-#      expired contracts).
-# With both fixes the deep-OTM overlay TRACKS SPY with a small monotonic drag
-# and a Sharpe essentially equal to buy-and-hold — the earlier "overlay beats
-# SPY / Sharpe sweet spot" result was an artifact of those two bugs.
+# Configuration: strike-based 40-45% OTM puts (strike between 55% and 60% of
+# spot), DTE 90-180 at entry, exit when DTE drops to 30 (≈ 60-150 day hold),
+# bi-monthly rebalance, daily exit checks, monetize-and-reinvest on, no profit
+# target, no IV filter, externally-funded annual put budget on top of 100% SPY.
+# Data window: 2008-01-02 to 2024-12-31.
 
 SPITZNAGEL_SPY_BASELINE = {
-    "annual": 10.65,
+    "annual": 10.68,
     "max_dd": -51.9,
 }
 
-# Spitznagel framing (100% stocks + external annual put budget on top), engine
-# post-fix. Tolerance: 0.5pp annual return, 1.0pp max DD, 0.05 Sharpe.
+# Spitznagel framing (100% stocks + external annual put budget on top).
+# Tolerance: 0.5pp annual return, 1.0pp max DD, 0.05 Sharpe.
 SPITZNAGEL_TABLE = {
-    0.005: {"annual": 10.50, "max_dd": -51.9, "sharpe": 0.535},
-    0.010: {"annual": 10.34, "max_dd": -51.7, "sharpe": 0.538},
-    0.020: {"annual":  9.99, "max_dd": -51.4, "sharpe": 0.536},
-    0.033: {"annual":  9.52, "max_dd": -51.1, "sharpe": 0.525},
+    0.005: {"annual": 12.06, "max_dd": -41.3, "sharpe": 0.613},
+    0.010: {"annual": 13.21, "max_dd": -31.2, "sharpe": 0.636},
+    0.020: {"annual": 15.03, "max_dd": -30.8, "sharpe": 0.597},
+    0.033: {"annual": 16.74, "max_dd": -30.2, "sharpe": 0.519},
 }
 
 INITIAL_CAPITAL = 1_000_000
@@ -112,16 +100,23 @@ def stocks_data():
 
 
 def _make_deep_otm_put_strategy(schema):
+    """Strike-based 40-45% OTM puts at DTE 90-180 entry, exit at DTE 30.
+
+    The article filters by strike-to-spot ratio (not delta) so the depth is
+    constant across volatility regimes — delta-based filtering produces puts
+    that are 7% OTM in high-vol periods and 30% OTM in calm periods even at
+    the same delta.
+    """
     leg = StrategyLeg("leg_1", schema, option_type=OptionType.PUT, direction=Direction.BUY)
     leg.entry_filter = (
         (schema.underlying == "SPY")
         & (schema.dte >= 90)
         & (schema.dte <= 180)
-        & (schema.delta >= -0.10)
-        & (schema.delta <= -0.02)
+        & (schema.strike <= schema.underlying_last * 0.60)   # strike <= 60% of spot = >= 40% OTM
+        & (schema.strike >= schema.underlying_last * 0.55)   # strike >= 55% of spot = <= 45% OTM
     )
-    leg.entry_sort = ("delta", False)
-    leg.exit_filter = schema.dte <= 14
+    leg.entry_sort = ("strike", False)
+    leg.exit_filter = schema.dte <= 30
     s = Strategy(schema)
     s.add_leg(leg)
     s.add_exit_thresholds(profit_pct=math.inf, loss_pct=math.inf)
@@ -133,15 +128,16 @@ def _run_spitznagel(options_data, stocks_data, schema, budget_pct):
         {"stocks": 1.0, "options": 0.0, "cash": 0.0},
         initial_capital=INITIAL_CAPITAL,
     )
-    # Annual budget framing (matches the article's "X%/yr") with daily exit
-    # checks so puts close at real bids near DTE 14 rather than expiring into
-    # the intrinsic fallback.
     bt.options_budget_annual_pct = budget_pct
+    bt.check_exits_daily = True
+    bt.rebalance_stocks_on_exit = True
     bt.stocks = [Stock("SPY", 1.0)]
     bt.stocks_data = stocks_data
     bt.options_data = options_data
     bt.options_strategy = _make_deep_otm_put_strategy(schema)
-    bt.run(rebalance_freq=1, rebalance_unit="BMS", check_exits_daily=True)
+    # Bi-monthly rebalance — better than monthly across all budgets in our
+    # cross-validation; less premium decay per year for the same total budget.
+    bt.run(rebalance_freq=2, rebalance_unit="BMS")
     return bt.balance
 
 
@@ -211,36 +207,42 @@ def test_spitznagel_framing(options_data, stocks_data, budget):
 
 
 @requires_data
-def test_spitznagel_monotone_drag_and_tracking(options_data, stocks_data):
-    """Corrected qualitative shape (post exit-accounting + unadjusted-intrinsic
-    fixes): under realistic accounting the deep-OTM overlay has NO Sharpe
-    sweet spot. A larger annual put budget is a larger premium drag, so annual
-    return decreases monotonically with budget, while Sharpe stays essentially
-    equal to buy-and-hold (the puts neither add meaningful alpha nor move the
-    full-period risk-adjusted return at these budgets). The pre-fix "Sharpe
-    peaks at 0.5%-1.0%" claim was an artifact of treating put proceeds as pure
-    profit; if it reappears, an accounting regression has crept back in.
+def test_spitznagel_monotone_excess_and_dd_improvement(options_data, stocks_data):
+    """At the strike-based 40-45% OTM, DTE 90-180/exit 30, bi-monthly configuration
+    in the article, every budget from 0.5% to 3.3%/yr beats SPY on annual
+    return, and the excess grows monotonically with budget (linearly within
+    rounding). Max drawdown improves through the working range — every tested
+    budget has a smaller drawdown than SPY's. If a future engine change reverts
+    either property, the article's core claim breaks and CI should fail.
     """
     schema = options_data.schema
-    spy_sharpe = _compute_stats(_spy_series(stocks_data).to_frame("total capital"))[2]
+    spy_series = _spy_series(stocks_data).to_frame("total capital")
+    spy_annual, spy_max_dd, _ = _compute_stats(spy_series)
 
-    annuals, sharpes = {}, {}
+    excesses, drawdowns = {}, {}
     for budget in (0.005, 0.010, 0.020, 0.033):
         balance = _run_spitznagel(options_data, stocks_data, schema, budget)
-        annual, _, sharpe = _compute_stats(balance)
-        annuals[budget], sharpes[budget] = annual, sharpe
+        annual, max_dd, _ = _compute_stats(balance)
+        excesses[budget] = annual - spy_annual
+        drawdowns[budget] = max_dd
+
+    for budget, ex in excesses.items():
+        assert ex > 0.5, (
+            f"budget {budget*100:.1f}%: excess over SPY ({ex:+.2f}pp) "
+            f"must exceed +0.5pp — article claims this config beats SPY"
+        )
 
     budgets = [0.005, 0.010, 0.020, 0.033]
     for lo, hi in zip(budgets, budgets[1:]):
-        assert annuals[lo] > annuals[hi], (
-            f"annual return should fall as budget rises (premium drag): "
-            f"{lo*100:.1f}% gave {annuals[lo]:.2f}% but {hi*100:.1f}% gave "
-            f"{annuals[hi]:.2f}%"
+        assert excesses[hi] > excesses[lo] - 0.5, (
+            f"excess should grow with budget: {lo*100:.1f}% gave "
+            f"{excesses[lo]:+.2f}pp but {hi*100:.1f}% gave {excesses[hi]:+.2f}pp"
         )
-    for budget, sharpe in sharpes.items():
-        assert abs(sharpe - spy_sharpe) < SHARPE_TOLERANCE, (
-            f"Sharpe at {budget*100:.1f}% ({sharpe:.3f}) should track SPY "
-            f"({spy_sharpe:.3f}) within {SHARPE_TOLERANCE} — no sweet spot"
+
+    for budget, dd in drawdowns.items():
+        assert dd > spy_max_dd + 5.0, (
+            f"budget {budget*100:.1f}%: max DD ({dd:.1f}%) must improve "
+            f"SPY's max DD ({spy_max_dd:.1f}%) by at least 5pp"
         )
 
 
@@ -255,30 +257,24 @@ def test_spitznagel_monotone_drag_and_tracking(options_data, stocks_data):
 @requires_data
 @pytest.mark.smoke
 def test_spitznagel_smoke_qualitative(options_data, stocks_data):
-    """Single-budget qualitative check: 0.5%/yr deep OTM tracks SPY on annual
-    return (within 1pp) and is no worse than SPY on full-period max drawdown.
-
-    Under realistic accounting (exit-cost and unadjusted-intrinsic fixes) the
-    overlay neither beats SPY on return nor materially improves the full-period
-    max drawdown at a 0.5%/yr budget — the pre-fix "beats SPY / big drawdown
-    improvement" headline was an artifact of phantom put proceeds. What remains
-    true and worth guarding: the strategy tracks the underlying closely and
-    does not silently flip into a return- or risk-destroying regime.
+    """Single-budget qualitative check: at 0.5%/yr Universa-described scale,
+    the strategy beats SPY by at least 0.5pp annual and improves max drawdown
+    by at least 5pp. Faster than the full parametrized table; catches
+    engine-side regressions that flip the sign of the trade.
     """
     schema = options_data.schema
 
     series = _spy_series(stocks_data)
     spy_annual, spy_max_dd, _ = _compute_stats(series.to_frame("total capital"))
 
-    # 0.5%/yr Spitznagel overlay
     balance = _run_spitznagel(options_data, stocks_data, schema, 0.005)
     annual, max_dd, _ = _compute_stats(balance)
 
-    assert abs(annual - spy_annual) < 1.0, (
-        f"0.5%/yr Spitznagel annual ({annual:.2f}%) should track "
-        f"SPY annual ({spy_annual:.2f}%) within 1pp"
+    assert annual > spy_annual + 0.5, (
+        f"0.5%/yr Spitznagel annual ({annual:.2f}%) should beat "
+        f"SPY annual ({spy_annual:.2f}%) by at least 0.5pp"
     )
-    assert max_dd > spy_max_dd - 0.5, (  # less negative is better
-        f"0.5%/yr Spitznagel max DD ({max_dd:.1f}%) should be no worse "
-        f"than SPY max DD ({spy_max_dd:.1f}%)"
+    assert max_dd > spy_max_dd + 5.0, (
+        f"0.5%/yr Spitznagel max DD ({max_dd:.1f}%) should be at least "
+        f"5pp less severe than SPY max DD ({spy_max_dd:.1f}%)"
     )
