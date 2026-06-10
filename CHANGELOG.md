@@ -123,6 +123,21 @@ anchored on the commit hash that introduced the change.
   SPY parquet, conversion cost is unchanged within noise.
 
 ### Invariants / defense-in-depth
+- **`BacktestEngine` rejects unknown attributes.** The engine is sealed
+  after ``__init__``: assigning an attribute it doesn't declare raises
+  ``AttributeError`` (with a did-you-mean suggestion) instead of becoming
+  silently-ignored dead config. This closes the whole
+  ``engine.check_exits_daily = True``-was-a-no-op bug class at the API
+  boundary. All legitimately-settable attributes are pre-declared in
+  ``__init__``.
+- **Regression-guard oracle tests in the default suite**
+  (``tests/test_regression_guards.py``, small bundled data, runs in CI on
+  every push): unknown-config rejection; the runtime class-A/class-B
+  invariants exercised on both self- and externally-funded paths; a
+  zero-budget run must equal stock-only exactly; an unfilled external
+  budget must be fully clawed back (no-fill leak branch); and
+  per-rebalance vs annual budget knobs must produce distinct runs
+  (catches one knob being rewired to the other's semantics).
 - **Optional runtime self-checks (`assert_invariants`).** New
   `BacktestEngine.assert_invariants` attribute (and `assert_invariants`
   config key; default ``False``, zero cost when off) turns on two

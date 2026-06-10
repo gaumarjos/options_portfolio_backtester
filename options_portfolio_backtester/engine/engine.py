@@ -133,6 +133,39 @@ class BacktestEngine:
         self.run_metadata: dict[str, Any] = {}
         self._event_log_rows: list[dict[str, Any]] = []
 
+        # Results and internal state populated by run()/setters. Pre-declared
+        # so the attribute seal below knows every legitimate name.
+        self.balance: pd.DataFrame | None = None
+        self.trade_log: pd.DataFrame | None = None
+        self.current_cash: float = 0.0
+        self._portfolio = None
+        self._stocks_schema = None
+        self._options_schema = None
+        self._strategy_slots: list[_StrategySlot] = []
+        self._options_inventory: pd.DataFrame | None = None
+        self._stocks_inventory: pd.DataFrame | None = None
+
+        # Seal: any attribute not declared above (or defined on the class) is
+        # rejected from here on. Assigning unknown config to an engine must be
+        # an error, not a silent no-op — `engine.check_exits_daily = True`
+        # being ignored for months is exactly how mis-set config escapes
+        # notice (see CHANGELOG).
+        self._sealed = True
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if getattr(self, "_sealed", False) and name not in self.__dict__ \
+                and not hasattr(type(self), name):
+            import difflib
+            known = [k for k in list(self.__dict__) + dir(type(self))
+                     if not k.startswith("__")]
+            hint = difflib.get_close_matches(name, known, n=1)
+            suggestion = f" Did you mean {hint[0]!r}?" if hint else ""
+            raise AttributeError(
+                f"BacktestEngine has no attribute {name!r}; refusing to set "
+                f"unknown config (it would be silently ignored).{suggestion}"
+            )
+        object.__setattr__(self, name, value)
+
     # -- Framing helpers ---------------------------------------------------
     # The two put-overlay framings in the literature map to two
     # different configurations of this engine. Both are configurable via
