@@ -170,11 +170,14 @@ Required: the backtest engine imports the Rust core at load time, so it must be 
 make rust-build
 ```
 
-| Benchmark | Python | Rust |
-|-----------|--------|------|
-| Full options backtest (24.7M rows) | 10.0s | **4.2s** |
-| Stock-only monthly rebalance | 3.7s | **0.6s** |
-| Parallel grid sweep (100 configs) | — | **5-8x** faster (Rayon, bypasses GIL) |
+| Benchmark | Time |
+|-----------|------|
+| Full options backtest (17-year SPY chain, ~22M rows) | ~4s |
+| Stock-only monthly rebalance | ~0.6s |
+| Parallel grid sweep (100 configs) | 5-8x vs sequential (Rayon, bypasses GIL) |
+
+(The former Python-engine comparison column was removed along with the
+Python engine path itself; those numbers are no longer reproducible.)
 
 ## Data
 

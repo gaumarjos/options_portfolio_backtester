@@ -269,3 +269,106 @@ class TestRuntimeInvariantChecks:
         eng.options_budget_pct = 0.033
         eng.run(rebalance_freq=1, rebalance_unit="BMS", check_exits_daily=False)
         assert len(eng.balance) > 1
+
+
+class TestExitPriceEnvelope:
+    """Truly independent class-B oracle (no shared code with the engine).
+
+    Every exit in the trade log must price inside the day's quote envelope,
+    reconstructed here in pandas directly from the raw CSVs:
+
+    - contract quoted on exit date (non-null bid) -> exit price within
+      [min(bid, ask), max(bid, ask)];
+    - contract unquoted (expired / missing / null bid) -> exit price no
+      greater than intrinsic value computed from the UNADJUSTED close.
+
+    The in-engine class-B invariant recomputes intrinsic via the same
+    helpers the engine uses, so a bug inside those helpers passes it. This
+    test rebuilds the bound from the raw data instead — the pre-fix
+    adjClose bug (phantom intrinsic ~ strike-minus-adjusted-spot) fails it
+    immediately, no matter where in the engine the wrong price came from.
+    """
+
+    SPC = 100
+
+    @pytest.fixture(scope="class")
+    def envelope_run(self):
+        opts = _Opts(_SPY_OPTS)
+        stx = _Stx(_SPY_STX)
+        eng = BacktestEngine(
+            {"stocks": 1.0, "options": 0.0, "cash": 0.0},
+            initial_capital=1_000_000,
+            cost_model=NoCosts(),
+            fill_model=MarketAtBidAsk(),
+        )
+        # Per-rebalance budget, NO daily exits: contracts routinely expire
+        # before the next rebalance, so the intrinsic fallback is exercised
+        # heavily — the exact regime where the adjClose bug lived.
+        eng.options_budget_pct = 0.033
+        eng.stocks = [_Stock("SPY", 1.0)]
+        eng.stocks_data = stx
+        eng.options_data = opts
+        eng.options_strategy = _deep_otm_put(opts.schema)
+        eng.run(rebalance_freq=1, rebalance_unit="BMS", check_exits_daily=False)
+        return eng, opts, stx
+
+    @_needs_spy
+    def test_every_exit_prices_inside_envelope(self, envelope_run):
+        eng, opts, stx = envelope_run
+        tl = eng.trade_log
+        exits = tl[tl[("leg_1", "order")].isin(["STC", "BTC"])]
+        assert len(exits) > 0, "no exits to check"
+
+        # Quote lookup for exited contracts only: (contract, date) -> bid, ask
+        od = opts._data
+        schema = opts.schema
+        c_col, d_col = schema["contract"], schema["date"]
+        contracts = set(exits[("leg_1", "contract")])
+        sub = od[od[c_col].isin(contracts)][[c_col, d_col, "bid", "ask"]]
+        quotes = {
+            (r[0], r[1]): (r[2], r[3])
+            for r in sub.itertuples(index=False, name=None)
+        }
+
+        # Unadjusted close by date (raw column, not DayStocks/adjClose).
+        sd = stx._data
+        spy = sd[sd[stx.schema["symbol"]] == "SPY"]
+        unadj = dict(zip(spy[stx.schema["date"]], spy["close"]))
+
+        eps = 1e-6
+        checked_quoted = checked_fallback = 0
+        for _, row in exits.iterrows():
+            # Trade-log dates are serialized as strings; quote/stock keys are
+            # Timestamps.
+            date = pd.Timestamp(row[("totals", "date")])
+            contract = row[("leg_1", "contract")]
+            strike = float(row[("leg_1", "strike")])
+            price = abs(float(row[("leg_1", "cost")])) / self.SPC
+
+            bid_ask = quotes.get((contract, date))
+            bid = bid_ask[0] if bid_ask is not None else None
+            if bid is not None and not np.isnan(bid):
+                ask = bid_ask[1]
+                hi = max(bid, ask) if not np.isnan(ask) else bid
+                lo = min(bid, ask) if not np.isnan(ask) else bid
+                assert lo - eps <= price <= hi + eps, (
+                    f"{contract} exit {date}: price {price} outside "
+                    f"quote envelope [{lo}, {hi}]"
+                )
+                checked_quoted += 1
+            else:
+                spot = float(unadj.get(date, 0.0))
+                intrinsic = max(strike - spot, 0.0)  # long puts only here
+                assert -eps <= price <= intrinsic + eps, (
+                    f"{contract} exit {date}: unquoted exit priced {price}, "
+                    f"unadjusted intrinsic bound {intrinsic} "
+                    f"(strike {strike}, raw close {spot})"
+                )
+                checked_fallback += 1
+
+        # The oracle is only meaningful if both branches were exercised.
+        assert checked_quoted > 0, "no quoted exits checked"
+        assert checked_fallback > 0, (
+            "no intrinsic-fallback exits occurred — config no longer "
+            "exercises the regime the adjClose bug lived in"
+        )

@@ -123,6 +123,24 @@ anchored on the commit hash that introduced the change.
   SPY parquet, conversion cost is unchanged within noise.
 
 ### Invariants / defense-in-depth
+- **Exit-price envelope oracle (independent class-B check).**
+  ``tests/bench/test_invariants.py::TestExitPriceEnvelope`` reconstructs,
+  in pandas directly from the raw CSVs, the price bound every trade-log
+  exit must satisfy: quoted contracts must exit inside the day's
+  [bid, ask]; unquoted (expired/missing) contracts must exit at no more
+  than intrinsic computed from the *unadjusted* close. Unlike the
+  in-engine ``assert_invariants`` class-B guard — which recomputes
+  intrinsic via the same helpers the engine uses and is therefore blind
+  to a bug inside them — this oracle shares no code with the engine, so
+  the pre-fix adjClose phantom pricing fails it no matter where in the
+  engine the wrong price originates. The test also asserts both branches
+  (quoted and fallback) are actually exercised, so it cannot silently
+  become vacuous.
+- **Article-reproduction fixtures clamp to the declared data window.**
+  The pinned tables are only valid for 2008-01-02..2024-12-31; the
+  fixtures now filter the loaded data to that window, so fetching a
+  longer range with ``fetch_data.py`` can no longer shift the pinned
+  numbers and masquerade as an engine regression.
 - **`BacktestEngine` rejects unknown attributes.** The engine is sealed
   after ``__init__``: assigning an attribute it doesn't declare raises
   ``AttributeError`` (with a did-you-mean suggestion) instead of becoming

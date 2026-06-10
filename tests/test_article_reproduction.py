@@ -30,6 +30,7 @@ import warnings
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 warnings.filterwarnings("ignore")
@@ -89,14 +90,30 @@ DRAWDOWN_TOLERANCE_PP = 1.0
 SHARPE_TOLERANCE = 0.05
 
 
+# The pinned tables above are only valid for this exact window. Clamp the
+# loaded data to it so fetching a longer range (e.g. `fetch_data.py` with a
+# later --end) cannot masquerade as an engine regression — an extra year of
+# data once shifted the most-leveraged row past tolerance and looked exactly
+# like a backtest bug.
+ARTICLE_WINDOW_END = pd.Timestamp("2024-12-31")
+
+
 @pytest.fixture(scope="module")
 def options_data():
-    return HistoricalOptionsData(str(OPTIONS_CSV))
+    d = HistoricalOptionsData(str(OPTIONS_CSV))
+    date_col = d.schema["date"]
+    d._data = d._data[d._data[date_col] <= ARTICLE_WINDOW_END]
+    d.end_date = d._data[date_col].max()
+    return d
 
 
 @pytest.fixture(scope="module")
 def stocks_data():
-    return TiingoData(str(STOCKS_CSV))
+    d = TiingoData(str(STOCKS_CSV))
+    date_col = d.schema["date"]
+    d._data = d._data[d._data[date_col] <= ARTICLE_WINDOW_END]
+    d.end_date = d._data[date_col].max()
+    return d
 
 
 def _make_deep_otm_put_strategy(schema):
