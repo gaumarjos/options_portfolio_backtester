@@ -111,6 +111,18 @@ class BacktestEngine:
         self.algos = list(algos or [])
         self.stop_if_broke = stop_if_broke
         self.max_notional_pct = max_notional_pct
+        # Default exit-checking cadence. `run(check_exits_daily=...)` overrides
+        # this when passed explicitly; otherwise run() falls back to this
+        # attribute so `engine.check_exits_daily = True` is honored rather than
+        # silently ignored.
+        self.check_exits_daily: bool = False
+        # Immediately redeploy freed cash into stocks after a daily option exit
+        # (monetize-and-reinvest), instead of waiting for the next rebalance
+        # date. Requires check_exits_daily=True to have any effect.
+        self.rebalance_stocks_on_exit: bool = False
+        # Enable runtime self-checks (cash-flow + valuation invariants) in the
+        # Rust engine. Off by default; intended for tests/debugging.
+        self.assert_invariants: bool = False
 
         self.options_budget_pct: float | None = None
         self.options_budget_annual_pct: float | None = None
@@ -248,15 +260,20 @@ class BacktestEngine:
     def run(self, rebalance_freq: int = 0, monthly: bool = False,
             sma_days: int | None = None,
             rebalance_unit: str = 'BMS',
-            check_exits_daily: bool = False) -> pd.DataFrame:
+            check_exits_daily: bool | None = None) -> pd.DataFrame:
         """Run the backtest. Returns the trade log DataFrame.
 
         Args:
             check_exits_daily: When True, evaluate exit filters on every trading
                 day (not just rebalancing days).  Positions that match the exit
                 filter are closed and cash is updated, but no new entries or
-                stock reallocation occurs outside rebalancing days.
+                stock reallocation occurs outside rebalancing days.  When left
+                as None (the default), falls back to ``self.check_exits_daily``
+                so the attribute form is honored; pass an explicit bool to
+                override the attribute for this run.
         """
+        if check_exits_daily is None:
+            check_exits_daily = self.check_exits_daily
         self._event_log_rows = []
         for algo in self.algos:
             if hasattr(algo, "reset"):
@@ -507,6 +524,8 @@ class BacktestEngine:
             "stop_if_broke": self.stop_if_broke,
             "max_notional_pct": self.max_notional_pct,
             "check_exits_daily": check_exits_daily,
+            "rebalance_stocks_on_exit": self.rebalance_stocks_on_exit,
+            "assert_invariants": self.assert_invariants,
         }
 
         schema_mapping = {
@@ -515,6 +534,13 @@ class BacktestEngine:
             "stocks_date": stocks_date_col,
             "stocks_symbol": self._stocks_schema["symbol"],
             "stocks_price": self._stocks_schema["adjClose"],
+            # Unadjusted close for option intrinsic value (strikes are raw
+            # prices). Falls back to adjClose if the data lacks a raw close.
+            "stocks_unadj_price": (
+                self._stocks_schema["close"]
+                if "close" in self._stocks_schema
+                else self._stocks_schema["adjClose"]
+            ),
             "underlying": self._options_schema["underlying"],
             "expiration": self._options_schema["expiration"],
             "type": self._options_schema["type"],
@@ -685,6 +711,8 @@ class BacktestEngine:
             "stop_if_broke": self.stop_if_broke,
             "max_notional_pct": self.max_notional_pct,
             "check_exits_daily": check_exits_daily,
+            "rebalance_stocks_on_exit": self.rebalance_stocks_on_exit,
+            "assert_invariants": self.assert_invariants,
         }
 
         schema_mapping = {
@@ -693,6 +721,13 @@ class BacktestEngine:
             "stocks_date": stocks_date_col,
             "stocks_symbol": self._stocks_schema["symbol"],
             "stocks_price": self._stocks_schema["adjClose"],
+            # Unadjusted close for option intrinsic value (strikes are raw
+            # prices). Falls back to adjClose if the data lacks a raw close.
+            "stocks_unadj_price": (
+                self._stocks_schema["close"]
+                if "close" in self._stocks_schema
+                else self._stocks_schema["adjClose"]
+            ),
             "underlying": self._options_schema["underlying"],
             "expiration": self._options_schema["expiration"],
             "type": self._options_schema["type"],
