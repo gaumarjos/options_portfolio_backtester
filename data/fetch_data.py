@@ -416,6 +416,14 @@ def align_dates(stocks_path, options_path):
     stocks_filtered.to_csv(stocks_path, index=False)
     options_filtered.to_csv(options_path, index=False)
 
+    # Keep the parquet twins in sync. The engine asserts stock/option date
+    # alignment at run(), and parquet is the recommended fast load path —
+    # leaving it unaligned makes every parquet-based run fail that assert.
+    for path, df in ((stocks_path, stocks_filtered), (options_path, options_filtered)):
+        pq = Path(path).with_suffix(".parquet")
+        if pq.exists():
+            df.to_parquet(pq, index=False)
+
     dropped_stock = len(stocks) - len(stocks_filtered)
     dropped_opt = len(options) - len(options_filtered)
     print(f"Aligned dates: {len(shared)} shared trading days")
