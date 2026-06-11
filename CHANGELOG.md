@@ -223,6 +223,16 @@ anchored on the commit hash that introduced the change.
   downloader warns on hash mismatch. (commit `60e6e91`)
 
 ### Tooling
+- **`fetch_data.py` keeps parquet outputs in sync with date alignment.**
+  ``align_dates()`` filtered the stock/option CSVs to their shared
+  trading days but never rewrote the parquet twins, so
+  ``options.parquet`` kept rows on dates absent from ``stocks.csv``.
+  The engine asserts stock/option date alignment at ``run()``, so every
+  parquet-based run after a fresh fetch failed that assert — including
+  ``research/spitznagel_spy/reproduce_article.py``. The filtered frames
+  are now also written to the sibling ``.parquet`` files. If your local
+  parquet predates this fix, re-run the fetch (or ``align_dates``) once
+  to regenerate it. (PR #107)
 - `PyO3 abi3-py311` feature enabled in `rust/ob_python/Cargo.toml`.
   The same extension now runs on Python 3.11+ including 3.14. The
   `make install-dev` target also sets
