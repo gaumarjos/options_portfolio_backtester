@@ -1,6 +1,6 @@
 # Data
 
-Storage for market data (`raw/` download cache, `processed/` engine-ready outputs — both gitignored). The fetch/convert tooling lives in [`scripts/`](../scripts).
+Storage for market data (`raw/` download cache, `processed/` engine-ready outputs — both gitignored). The fetch/convert tooling lives in [`scripts/`](../scripts). Provenance, redistribution posture, mirrors, and backup/verification instructions: [`DATA_NOTICE.md`](DATA_NOTICE.md).
 
 ## Quick Start
 

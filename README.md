@@ -31,7 +31,7 @@ The canonical SPY parquets are pinned by SHA-256 in `scripts/fetch_data.py`:
 - `SPY_options.parquet`: `a7152991b45b81f090f970e945bf88def8093b8ecb9b250e9891cb6d88041f0a`
 - `SPY_underlying.parquet`: `847e60a441eb10969d87cd4a6da604257b782d9076168f68d5730b84096c79db`
 
-A hash mismatch warning means the upstream release has been updated; published-article reproductions are pinned to the hashes above. Pass `--allow-fallback` to permit the secondary mirrors (options-data CDN / yfinance) when the canonical source is unreachable. Fallbacks return different bytes and break bit-for-bit reproducibility.
+A hash mismatch warning means the source has been updated; published-article reproductions are pinned to the hashes above. Provenance and redistribution posture: [`data/DATA_NOTICE.md`](data/DATA_NOTICE.md). Verify any copy with `python scripts/fetch_data.py verify`. Pass `--allow-fallback` to permit the secondary mirrors (options-data CDN / yfinance) when the canonical source is unreachable. Fallbacks return different bytes and break bit-for-bit reproducibility.
 
 ### Run your first backtest
 

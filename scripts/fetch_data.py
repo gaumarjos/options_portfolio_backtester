@@ -36,14 +36,34 @@ PROCESSED_DIR = BASE_DIR / "processed"
 # bytes and are only consulted when --allow-fallback is passed.
 RELEASE_URL = "https://github.com/lambdaclass/options_backtester/releases/download/data-v1"
 
-# Canonical SHA-256 hashes for files served from RELEASE_URL. When the
-# downloaded file's hash does not match what is recorded here, the
-# downloader prints a warning so the user can decide whether to keep
-# stale-but-reproducible bytes or accept a new canonical version. This
-# is what gives reproducibility a name: pin the hash, you pin the result.
+# Canonical-source mirrors, tried in order. Every download is verified
+# against CANONICAL_HASHES below, so a mirror cannot serve tampered or
+# divergent bytes without a loud warning — which is what makes adding
+# mirrors safe. The upstream this dataset was originally mirrored from is
+# gone (CDN and repo both), so these copies are now primary sources; see
+# data/DATA_NOTICE.md for provenance and redistribution posture.
+# Each entry is a URL template receiving the bare filename.
+CANONICAL_MIRRORS = [
+    f"{RELEASE_URL}/{{fname}}",
+    # Zenodo archival mirror (DOI-pinned). Enable by substituting the
+    # record id once published — upload steps in data/DATA_NOTICE.md:
+    # "https://zenodo.org/records/RECORD_ID/files/{fname}?download=1",
+    # Hugging Face mirror (optional):
+    # "https://huggingface.co/datasets/USER/options-data-v1/resolve/main/{fname}",
+]
+
+# Canonical SHA-256 hashes for the data-v1 assets. When a downloaded
+# file's hash does not match what is recorded here, the downloader prints
+# a warning so the user can decide whether to keep stale-but-reproducible
+# bytes or accept a new canonical version. This is what gives
+# reproducibility a name: pin the hash, you pin the result.
 CANONICAL_HASHES = {
     "SPY_options.parquet":    "a7152991b45b81f090f970e945bf88def8093b8ecb9b250e9891cb6d88041f0a",
     "SPY_underlying.parquet": "847e60a441eb10969d87cd4a6da604257b782d9076168f68d5730b84096c79db",
+    "QQQ_options.parquet":    "1f831556cd87ec9d7af43d3b47a69a829ffb2fb199cfcef4ff55d289badf8734",
+    "QQQ_underlying.parquet": "78c015fd7fa9d493cd798d5ae81b3c2ae6dc3b8176e25e7bb90cd4114b103351",
+    "IWM_options.parquet":    "d16a728116f8095c97c39ed66e75000bf66a0ab422b678002eb9f6086fd10ee5",
+    "IWM_underlying.parquet": "e980f50473a8c346ba9ac8b05dcf3da691581dae742f649cb3608d0efe2ef940",
 }
 
 # Fallback sources. These give different bytes than the canonical release
@@ -107,19 +127,27 @@ def _download(url, dest, force=False):
     return dest
 
 
+def _download_canonical(fname, dest, force=False):
+    """Try each canonical mirror in order; hash-verify whatever arrives."""
+    for template in CANONICAL_MIRRORS:
+        result = _download(template.format(fname=fname), dest, force)
+        if result is not None:
+            if fname in CANONICAL_HASHES:
+                _verify_canonical_hash(result, CANONICAL_HASHES[fname])
+            return result
+    return None
+
+
 def download_options_parquet(symbol, force=False):
-    """Download options parquet. Priority: GitHub Release (canonical) >
-    options-data CDN (only if --allow-fallback was passed)."""
+    """Download options parquet. Priority: canonical mirrors (hash-verified)
+    > options-data CDN (only if --allow-fallback was passed; defunct)."""
     sym = symbol.upper()
 
-    # 1. Self-hosted GitHub Release (canonical source)
+    # 1. Canonical mirrors (GitHub Release, plus any archival mirrors)
     fname = f"{sym}_options.parquet"
     dest = RAW_DIR / "release" / fname
-    url = f"{RELEASE_URL}/{fname}"
-    result = _download(url, dest, force)
+    result = _download_canonical(fname, dest, force)
     if result is not None:
-        if fname in CANONICAL_HASHES:
-            _verify_canonical_hash(result, CANONICAL_HASHES[fname])
         return result
 
     if not ALLOW_FALLBACK:
@@ -144,10 +172,10 @@ def download_underlying(symbol, force=False):
     """
     sym = symbol.upper()
 
-    # 1. Self-hosted GitHub Release
-    dest = RAW_DIR / "release" / f"{sym}_underlying.parquet"
-    url = f"{RELEASE_URL}/{sym}_underlying.parquet"
-    result = _download(url, dest, force)
+    # 1. Canonical mirrors (GitHub Release, plus any archival mirrors)
+    fname = f"{sym}_underlying.parquet"
+    dest = RAW_DIR / "release" / fname
+    result = _download_canonical(fname, dest, force)
     if result is not None:
         df = pd.read_parquet(result)
         if not df.empty:
@@ -439,7 +467,43 @@ def align_dates(stocks_path, options_path):
 # CLI
 # ---------------------------------------------------------------------------
 
+def verify_local_assets():
+    """Verify every cached data-v1 asset against the canonical hashes.
+
+    Run this on any copy of the raw assets (e.g. a backup drive with
+    data/raw/release/) to prove it is byte-identical to the canonical
+    dataset. SPY is listed first — it is the dataset the published
+    reproductions pin.
+    """
+    import hashlib
+    release_dir = RAW_DIR / "release"
+    order = sorted(CANONICAL_HASHES, key=lambda f: (not f.startswith("SPY"), f))
+    ok = missing = bad = 0
+    for fname in order:
+        path = release_dir / fname
+        if not path.exists():
+            print(f"  MISSING  {fname}")
+            missing += 1
+            continue
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        if h.hexdigest() == CANONICAL_HASHES[fname]:
+            print(f"  OK       {fname}")
+            ok += 1
+        else:
+            print(f"  MISMATCH {fname}  (got {h.hexdigest()[:16]}…)")
+            bad += 1
+    print(f"\n{ok} ok, {missing} missing, {bad} mismatched "
+          f"(checked against canonical data-v1 hashes)")
+    return 1 if bad else 0
+
+
 def main():
+    if sys.argv[1:2] == ["verify"]:
+        sys.exit(verify_local_assets())
+
     parser = argparse.ArgumentParser(
         description="Fetch stock and options data for the backtester"
     )
