@@ -374,9 +374,8 @@ pub fn run_backtest_with_filters(
     let mut positions: Vec<Position> = Vec::new();
     let mut stock_holdings: Vec<StockHolding> = Vec::new();
     let mut peak_value: f64 = config.initial_capital;
-    // Initial value is overwritten inside the rebalance_date macro before first read,
-    // but we need a valid initial binding for the macro's mutable capture.
-    #[allow(unused_assignments)]
+    // Initial value is overwritten inside rebalance_date() before first read,
+    // but we need a valid initial binding to pass by mutable reference.
     let mut portfolio_greeks = Greeks::default();
 
     let mut trade_rows: Vec<TradeRow> = Vec::new();
@@ -401,135 +400,6 @@ pub fn run_backtest_with_filters(
         1.0
     };
 
-    // Rebalance helper: executes full rebalance logic for a single date.
-    // Extracted as a macro to avoid duplicating 60 lines across the two loop
-    // variants (rb-only vs all-dates).
-    macro_rules! rebalance_date {
-        ($rb_date:expr, $prev_rb_date:expr, $partitioned:expr,
-         $config:expr, $entry_filters:expr, $exit_filters:expr,
-         $schema:expr, $sma_map_by_date:expr,
-         $positions:expr, $stock_holdings:expr, $cash:expr,
-         $peak_value:expr, $portfolio_greeks:expr,
-         $trade_rows:expr, $balance_days:expr) => {{
-            let rb_date = $rb_date;
-            let prev_rb_date = $prev_rb_date;
-
-            // _update_balance(prev_rb_date, rb_date)
-            compute_balance_period(
-                &$positions, &$stock_holdings,
-                $partitioned,
-                prev_rb_date, rb_date,
-                $config.shares_per_contract, $cash,
-                &$config.legs,
-                &mut $balance_days,
-            );
-
-            let day_opts = match $partitioned.options.get(&rb_date) {
-                Some(d) if d.height() > 0 => d,
-                _ => { continue; }
-            };
-            let day_stocks = $partitioned.stocks.get(&rb_date);
-
-            // Run exit filters
-            let externally_funded = $config.options_budget_pct.is_some()
-                || $config.options_budget_annual_pct.is_some();
-            execute_exits(
-                &mut $positions, &mut $cash, day_opts,
-                $config.shares_per_contract,
-                &$config.legs, $exit_filters,
-                $config.profit_pct, $config.loss_pct,
-                $schema, rb_date, &mut $trade_rows,
-                &$config.cost_model, day_stocks,
-                externally_funded,
-                $config.assert_invariants,
-            )?;
-
-            // Recompute portfolio greeks from current market data after exits
-            $portfolio_greeks = compute_portfolio_greeks_from_market(
-                &$positions, day_opts, &$config.legs,
-            );
-
-            // Compute total capital including held options
-            let stock_cap = compute_stock_capital(&$stock_holdings, day_stocks);
-            let options_cap = compute_options_capital(
-                &$positions, day_opts, $config.shares_per_contract, day_stocks,
-            );
-            let total_capital = $cash + stock_cap + options_cap;
-            $peak_value = $peak_value.max(total_capital);
-
-            // Rebalance stocks
-            let externally_funded = $config.options_budget_pct.is_some()
-                || $config.options_budget_annual_pct.is_some();
-            let liquid_capital = total_capital - options_cap;
-            let stocks_alloc = if externally_funded {
-                $config.allocation_stocks * liquid_capital
-            } else {
-                // Cap to liquid_capital: can't buy stocks with capital locked in options
-                ($config.allocation_stocks * total_capital).min(liquid_capital)
-            };
-            $stock_holdings.clear();
-            $cash = liquid_capital;
-
-            let sma_prices = $sma_map_by_date.as_ref().and_then(|m| m.get(&rb_date));
-            buy_stocks(
-                &$config.stock_symbols, &$config.stock_percentages,
-                day_stocks, stocks_alloc, &mut $stock_holdings,
-                &$config.cost_model, &mut $cash, sma_prices,
-            );
-
-            // Options: buy with remaining budget only
-            let options_alloc = if let Some(pct) = $config.options_budget_pct {
-                total_capital * pct
-            } else if let Some(annual) = $config.options_budget_annual_pct {
-                total_capital * (annual / rebalances_per_year)
-            } else {
-                $config.allocation_options * total_capital
-            };
-            let remaining_budget = if $config.options_budget_fresh_spend {
-                options_alloc
-            } else {
-                options_alloc - options_cap
-            };
-            if remaining_budget > 0.0 {
-                let held: Vec<String> = $positions.iter()
-                    .flat_map(|p| p.leg_contracts.clone())
-                    .collect();
-
-                if externally_funded {
-                    $cash += remaining_budget;
-                }
-
-                if let Some(pos) = execute_entries(
-                    &$config.legs, $entry_filters, day_opts, &held,
-                    $config.shares_per_contract, remaining_budget,
-                    $schema, rb_date, &mut $trade_rows,
-                    &$config.fill_model, &$config.signal_selector,
-                    &$config.risk_constraints, &$portfolio_greeks,
-                    total_capital, $peak_value,
-                    $config.max_notional_pct, &$positions,
-                )? {
-                    let cost = pos.entry_cost * pos.quantity;
-                    let commission = $config.cost_model.option_cost(
-                        cost.abs(), pos.quantity, $config.shares_per_contract,
-                    );
-                    $cash -= cost + commission;
-                    if externally_funded {
-                        // Claw back unspent portion of externally-funded budget
-                        $cash -= remaining_budget - cost - commission;
-                    }
-                    $portfolio_greeks += pos.greeks;
-                    $positions.push(pos);
-                } else if externally_funded {
-                    $cash -= remaining_budget;
-                }
-            }
-
-            if $config.stop_if_broke && $cash < 0.0 {
-                break;
-            }
-        }};
-    }
-
     if config.check_exits_daily {
         // All-dates loop: check exits on every trading day, rebalance on rb dates.
         use std::collections::HashSet;
@@ -539,14 +409,21 @@ pub fn run_backtest_with_filters(
         for &date in &partitioned.all_dates_sorted {
             if rb_set.contains(&date) {
                 let prev_rb_date = if rb_idx == 0 { date } else { rb_dates[rb_idx - 1] };
-                rebalance_date!(
-                    date, prev_rb_date, &partitioned,
-                    config, &entry_filters, &exit_filters,
-                    schema, sma_map_by_date,
-                    positions, stock_holdings, cash,
-                    peak_value, portfolio_greeks,
-                    trade_rows, balance_days
-                );
+                match rebalance_date(
+                    date, prev_rb_date, partitioned,
+                    config, entry_filters, exit_filters,
+                    schema, sma_map_by_date.as_ref(),
+                    rebalances_per_year,
+                    &mut positions, &mut stock_holdings, &mut cash,
+                    &mut peak_value, &mut portfolio_greeks,
+                    &mut trade_rows, &mut balance_days,
+                )? {
+                    // Note: the original macro's `continue` fired before the
+                    // `rb_idx += 1` below, so SkipDate must too.
+                    RebalanceOutcome::SkipDate => continue,
+                    RebalanceOutcome::StopBroke => break,
+                    RebalanceOutcome::Done => {}
+                }
                 rb_idx += 1;
             } else if !positions.is_empty() {
                 // Non-rebalance day: only run exits
@@ -600,14 +477,19 @@ pub fn run_backtest_with_filters(
         // Fast path: iterate only rebalance dates (typical: ~200 vs ~4500 all dates).
         for (rb_idx, &rb_date) in rb_dates.iter().enumerate() {
             let prev_rb_date = if rb_idx == 0 { rb_date } else { rb_dates[rb_idx - 1] };
-            rebalance_date!(
-                rb_date, prev_rb_date, &partitioned,
-                config, &entry_filters, &exit_filters,
-                schema, sma_map_by_date,
-                positions, stock_holdings, cash,
-                peak_value, portfolio_greeks,
-                trade_rows, balance_days
-            );
+            match rebalance_date(
+                rb_date, prev_rb_date, partitioned,
+                config, entry_filters, exit_filters,
+                schema, sma_map_by_date.as_ref(),
+                rebalances_per_year,
+                &mut positions, &mut stock_holdings, &mut cash,
+                &mut peak_value, &mut portfolio_greeks,
+                &mut trade_rows, &mut balance_days,
+            )? {
+                RebalanceOutcome::SkipDate => continue,
+                RebalanceOutcome::StopBroke => break,
+                RebalanceOutcome::Done => {}
+            }
         }
     }
 
@@ -627,6 +509,158 @@ pub fn run_backtest_with_filters(
     }
 
     build_result(&trade_rows, &balance_days, &config.legs, cash)
+}
+
+/// Outcome of a single-date rebalance step. The original macro used `continue`
+/// and `break` directly inside the caller's loop; as a function we return this
+/// enum instead and let each call site translate it into loop control flow.
+enum RebalanceOutcome {
+    /// Rebalance completed normally.
+    Done,
+    /// The rebalance date had no options rows — caller should `continue` to the
+    /// next date. Note: compute_balance_period has already run by this point.
+    SkipDate,
+    /// stop_if_broke triggered (cash went negative) — caller should `break`.
+    StopBroke,
+}
+
+/// Rebalance helper: executes full rebalance logic for a single date.
+/// Shared by the two loop variants (rb-only vs all-dates) of the
+/// single-strategy backtest.
+#[allow(clippy::too_many_arguments)]
+fn rebalance_date(
+    rb_date: i64,
+    prev_rb_date: i64,
+    partitioned: &PartitionedData,
+    config: &BacktestConfig,
+    entry_filters: &[Option<CompiledFilter>],
+    exit_filters: &[Option<CompiledFilter>],
+    schema: &SchemaMapping,
+    sma_map_by_date: Option<&HashMap<i64, HashMap<String, f64>>>,
+    rebalances_per_year: f64,
+    positions: &mut Vec<Position>,
+    stock_holdings: &mut Vec<StockHolding>,
+    cash: &mut f64,
+    peak_value: &mut f64,
+    portfolio_greeks: &mut Greeks,
+    trade_rows: &mut Vec<TradeRow>,
+    balance_days: &mut Vec<BalanceDay>,
+) -> PolarsResult<RebalanceOutcome> {
+    // _update_balance(prev_rb_date, rb_date)
+    compute_balance_period(
+        positions, stock_holdings,
+        partitioned,
+        prev_rb_date, rb_date,
+        config.shares_per_contract, *cash,
+        &config.legs,
+        balance_days,
+    );
+
+    let day_opts = match partitioned.options.get(&rb_date) {
+        Some(d) if d.height() > 0 => d,
+        _ => return Ok(RebalanceOutcome::SkipDate),
+    };
+    let day_stocks = partitioned.stocks.get(&rb_date);
+
+    // Run exit filters
+    let externally_funded = config.options_budget_pct.is_some()
+        || config.options_budget_annual_pct.is_some();
+    execute_exits(
+        positions, cash, day_opts,
+        config.shares_per_contract,
+        &config.legs, exit_filters,
+        config.profit_pct, config.loss_pct,
+        schema, rb_date, trade_rows,
+        &config.cost_model, day_stocks,
+        externally_funded,
+        config.assert_invariants,
+    )?;
+
+    // Recompute portfolio greeks from current market data after exits
+    *portfolio_greeks = compute_portfolio_greeks_from_market(
+        positions, day_opts, &config.legs,
+    );
+
+    // Compute total capital including held options
+    let stock_cap = compute_stock_capital(stock_holdings, day_stocks);
+    let options_cap = compute_options_capital(
+        positions, day_opts, config.shares_per_contract, day_stocks,
+    );
+    let total_capital = *cash + stock_cap + options_cap;
+    *peak_value = peak_value.max(total_capital);
+
+    // Rebalance stocks
+    let externally_funded = config.options_budget_pct.is_some()
+        || config.options_budget_annual_pct.is_some();
+    let liquid_capital = total_capital - options_cap;
+    let stocks_alloc = if externally_funded {
+        config.allocation_stocks * liquid_capital
+    } else {
+        // Cap to liquid_capital: can't buy stocks with capital locked in options
+        (config.allocation_stocks * total_capital).min(liquid_capital)
+    };
+    stock_holdings.clear();
+    *cash = liquid_capital;
+
+    let sma_prices = sma_map_by_date.and_then(|m| m.get(&rb_date));
+    buy_stocks(
+        &config.stock_symbols, &config.stock_percentages,
+        day_stocks, stocks_alloc, stock_holdings,
+        &config.cost_model, cash, sma_prices,
+    );
+
+    // Options: buy with remaining budget only
+    let options_alloc = if let Some(pct) = config.options_budget_pct {
+        total_capital * pct
+    } else if let Some(annual) = config.options_budget_annual_pct {
+        total_capital * (annual / rebalances_per_year)
+    } else {
+        config.allocation_options * total_capital
+    };
+    let remaining_budget = if config.options_budget_fresh_spend {
+        options_alloc
+    } else {
+        options_alloc - options_cap
+    };
+    if remaining_budget > 0.0 {
+        let held: Vec<String> = positions.iter()
+            .flat_map(|p| p.leg_contracts.clone())
+            .collect();
+
+        if externally_funded {
+            *cash += remaining_budget;
+        }
+
+        if let Some(pos) = execute_entries(
+            &config.legs, entry_filters, day_opts, &held,
+            config.shares_per_contract, remaining_budget,
+            schema, rb_date, trade_rows,
+            &config.fill_model, &config.signal_selector,
+            &config.risk_constraints, portfolio_greeks,
+            total_capital, *peak_value,
+            config.max_notional_pct, positions,
+        )? {
+            let cost = pos.entry_cost * pos.quantity;
+            let commission = config.cost_model.option_cost(
+                cost.abs(), pos.quantity, config.shares_per_contract,
+            );
+            *cash -= cost + commission;
+            if externally_funded {
+                // Claw back unspent portion of externally-funded budget
+                *cash -= remaining_budget - cost - commission;
+            }
+            *portfolio_greeks += pos.greeks;
+            positions.push(pos);
+        } else if externally_funded {
+            *cash -= remaining_budget;
+        }
+    }
+
+    if config.stop_if_broke && *cash < 0.0 {
+        return Ok(RebalanceOutcome::StopBroke);
+    }
+
+    Ok(RebalanceOutcome::Done)
 }
 
 // ---------------------------------------------------------------------------
