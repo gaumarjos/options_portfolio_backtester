@@ -31,7 +31,7 @@ jobs:
       # the SPY dataset (data-dependent tests skip themselves). SPY-gated
       # tests run in the article-reproduction job below, with caching.
       - name: Run tests
-        run: python -m pytest -v tests/ --ignore=tests/heavy --ignore=tests/compat --ignore=tests/oracles/test_article_reproduction.py
+        run: python -m pytest -v tests/ --ignore=tests/heavy --ignore=tests/oracles/test_article_reproduction.py
       - name: Type check (informational)
         # The codebase has ~90 pre-existing mypy errors under modern
         # pandas-stubs; the old nix CI only passed because nixpkgs pinned

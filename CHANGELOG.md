@@ -249,11 +249,28 @@ anchored on the commit hash that introduced the change.
   downloader warns on hash mismatch. (commit `60e6e91`)
 
 ### Internal
+- **Dead-weight purge; convexity tests re-enabled.**
+  - ``tests/convexity/`` (18 tests, 0.08s) now runs in the default suite
+    — it was gated by an addopts ignore although the module it covers is
+    live API (strategy presets import it) and the tests pass.
+  - Deleted ``tests/test_deep_analytics_convexity.py``: permanently
+    broken at collection (imports ``_find_target_put``, removed when
+    scoring moved to Rust) and hidden by an addopts ignore.
+  - Deleted the bt-comparison tooling: ``tests/compat/``,
+    ``benchmarks/compare_with_bt.py``, ``benchmarks/benchmark_matrix.py``
+    and the ``compare-bt``/``benchmark-matrix``/``parity-gate`` Makefile
+    targets. They require the ``bt`` library, which is not (and never
+    was) a dependency of this project, so none of it was runnable from a
+    fresh checkout. ``/benchmarks`` is gone; ``make rust-bench``
+    (criterion) remains the performance benchmark entry point.
+  - Deleted dead Makefile targets ``notebooks`` (no ``notebooks/``
+    directory exists) and ``walk-forward-report`` (the script it invoked
+    does not exist), and the ``bench`` target (no pytest-benchmark tests
+    exist); ``install-dev`` no longer installs the ``notebooks`` extra.
 - **Directory tidy (renames; import/path updates throughout).**
   - ``tests/bench/`` → ``tests/heavy/`` and the ``bench`` pytest marker
     → ``heavy``: the tier holds data-heavy *correctness* tests, not
-    benchmarks (performance benchmarks live in ``/benchmarks``). The
-    Makefile target is now ``make test-heavy``.
+    benchmarks. The Makefile target is now ``make test-heavy``.
   - ``tests/test_data/`` → ``tests/fixtures/`` (committed small CSVs;
     distinct from gitignored ``tests/_generated/``).
   - ``data/fetch_data.py``, ``fetch_signals.py``, ``convert_optionsdx.py``
@@ -305,7 +322,7 @@ anchored on the commit hash that introduced the change.
   `benchmark_large_pipeline.py`, and `benchmark_sweep.py` imported the
   Python-engine dispatch layer deleted in `0951478` and crashed on
   import; their purpose (Rust-vs-Python comparison) no longer exists.
-  `benchmark_matrix.py` and `compare_with_bt.py` remain.
+  `benchmark_matrix.py` and `compare_with_bt.py` were removed in a follow-up (below) along with the rest of the bt-comparison tooling.
 
 ### Tooling
 - **CI now gates merges on the published numbers.** New

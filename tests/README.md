@@ -7,8 +7,8 @@ pick the tier by asking *what failure it is supposed to catch*.
 |------|-------|------|-----------------|
 | **Unit** | `tests/<module>/` mirroring the package (`engine/`, `data/`, `strategy/`, `execution/`, `portfolio/`, `analytics/`, `core/`) | default suite | a module's behavior in isolation |
 | **Oracles** | `tests/oracles/` | default suite (+ CI `article-reproduction` job for the data-dependent one) | engine-level correctness against *independent* references — see below |
-| **Heavy / opt-in** | `tests/heavy/` | `pytest tests/heavy -o addopts=""` and the CI `article-reproduction` job | data-heavy correctness at production scale (17-year SPY chain), property suites, edge cases. Performance benchmarks live in `/benchmarks` (this tier was historically named `tests/bench`) |
-| **Legacy-gated** | `tests/compat/`, `tests/convexity/` | explicitly only (ignored in `pyproject.toml` addopts) | compatibility with external libs / the convexity research module |
+| **Heavy / opt-in** | `tests/heavy/` | `pytest tests/heavy -o addopts=""` and the CI `article-reproduction` job | data-heavy correctness at production scale (17-year SPY chain), property suites, edge cases. (this tier was historically named `tests/bench`) |
+| **Convexity** | `tests/convexity/` | default suite | the convexity scoring/backtest module (used by strategy presets) |
 
 ## What "oracle" means here
 

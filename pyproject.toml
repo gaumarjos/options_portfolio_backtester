@@ -42,7 +42,7 @@ include = ["options_portfolio_backtester*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m \"not heavy\" --ignore=tests/heavy --ignore=tests/convexity --ignore=tests/compat --ignore=tests/test_deep_analytics_convexity.py"
+addopts = "-m \"not heavy\" --ignore=tests/heavy"
 markers = [
     "heavy: data-heavy at-scale correctness tests requiring explicit opt-in",
     "slow: full-range stress tests (17-year SPY, minutes to run)",
