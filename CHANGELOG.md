@@ -123,7 +123,7 @@ anchored on the commit hash that introduced the change.
   SPY parquet, conversion cost is unchanged within noise.
 
 ### Invariants / defense-in-depth
-- **Golden hand-computed scenario** (``tests/test_golden_scenario.py``,
+- **Golden hand-computed scenario** (``tests/oracles/test_golden_scenario.py``,
   default suite, ~0.4s): a 9-day synthetic dataset (stock 100 → 50, one
   strike-80 put, 5% per-rebalance external budget) whose correct final
   capital — $1,950,030.00 — is derived by hand-arithmetic in comments
@@ -167,7 +167,7 @@ anchored on the commit hash that introduced the change.
   boundary. All legitimately-settable attributes are pre-declared in
   ``__init__``.
 - **Regression-guard oracle tests in the default suite**
-  (``tests/test_regression_guards.py``, small bundled data, runs in CI on
+  (``tests/oracles/test_regression_guards.py``, small bundled data, runs in CI on
   every push): unknown-config rejection; the runtime class-A/class-B
   invariants exercised on both self- and externally-funded paths; a
   zero-budget run must equal stock-only exactly; an unfilled external
@@ -248,12 +248,28 @@ anchored on the commit hash that introduced the change.
   bytes. The canonical SPY parquets are pinned by SHA-256 and the
   downloader warns on hash mismatch. (commit `60e6e91`)
 
+### Internal
+- **Test suite reorganized by intent.** The four cross-cutting
+  correctness anchors moved from the `tests/` top level into
+  `tests/oracles/` (golden scenario, regression guards, engine fuzzing,
+  article reproduction), and `tests/README.md` documents the tier model
+  (unit mirrors the package; oracles check against engine-independent
+  references; `tests/bench/` is the data-heavy opt-in tier — historically
+  misnamed, it holds correctness tests, not benchmarks). All live path
+  references (Makefile, CI, docs, reproduce_article.py) updated;
+  historical CHANGELOG entries keep their original paths.
+- **Removed dead benchmarks.** `benchmarks/benchmark_rust_vs_python.py`,
+  `benchmark_large_pipeline.py`, and `benchmark_sweep.py` imported the
+  Python-engine dispatch layer deleted in `0951478` and crashed on
+  import; their purpose (Rust-vs-Python comparison) no longer exists.
+  `benchmark_matrix.py` and `compare_with_bt.py` remain.
+
 ### Tooling
 - **CI now gates merges on the published numbers.** New
   ``article-reproduction`` job in ``.github/workflows/ci.yml`` restores
   the pinned SPY dataset from an actions cache (~600MB, keyed on the
   data-v1 SHA-256 hashes; cache miss re-downloads from the release) and
-  runs ``tests/test_article_reproduction.py`` plus the data-dependent
+  runs ``tests/oracles/test_article_reproduction.py`` plus the data-dependent
   invariant/oracle suite on every push and PR. Previously the strongest
   defenses (reproduction pins, runtime invariants at SPY scale, the
   exit-price envelope oracle) only ran locally. Also removed the fast
@@ -262,7 +278,7 @@ anchored on the commit hash that introduced the change.
   ``--start/--end``, so it could never have succeeded; the default suite
   is designed to pass with data-dependent tests skipping.
 - **Parquet is the canonical processed format.** The SPY-scale test
-  fixtures (``tests/test_article_reproduction.py``,
+  fixtures (``tests/oracles/test_article_reproduction.py``,
   ``tests/bench/test_invariants.py``) now load
   ``data/processed/options.parquet`` instead of the 3.3GB CSV — ~30x
   faster load (~0.4s vs ~15s), cutting the reproduction suite from ~37s
@@ -273,7 +289,7 @@ anchored on the commit hash that introduced the change.
   version, git commit, and SHA-256 of the exact data files — so every
   published table is traceable to the exact code and bytes that produced
   it.
-- **Property-based engine fuzzing** (``tests/test_engine_fuzz.py``,
+- **Property-based engine fuzzing** (``tests/oracles/test_engine_fuzz.py``,
   default suite, ~1s): hypothesis generates random small option chains
   (including dividend-adjusted closes and contracts that vanish after
   expiry) and random engine configs across allocation/budget/exit-mode

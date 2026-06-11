@@ -16,7 +16,7 @@ jobs:
       # never have succeeded. SPY-gated tests run in the
       # article-reproduction job below, with caching.
       - name: Run tests
-        run: nix develop --command python -m pytest -v tests/ --ignore=tests/bench --ignore=tests/compat --ignore=tests/test_article_reproduction.py
+        run: nix develop --command python -m pytest -v tests/ --ignore=tests/bench --ignore=tests/compat --ignore=tests/oracles/test_article_reproduction.py
       - name: Type check
         run: nix develop --command python -m mypy options_portfolio_backtester --ignore-missing-imports
 
@@ -62,7 +62,7 @@ jobs:
         # If a backtester change moves a published-article number by more
         # than the test's tolerance, this step fails and the PR needs
         # either an article-side update or a backtester-side review.
-        run: nix develop --command python -m pytest tests/test_article_reproduction.py -q
+        run: nix develop --command python -m pytest tests/oracles/test_article_reproduction.py -q
 
       - name: Run data-dependent invariant tests
         # Some test classes skip themselves when generated-data files are

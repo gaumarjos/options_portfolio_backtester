@@ -383,7 +383,7 @@ variants; none improved on the base.
 - Data: SPY parquet pinned to SHA-256 `a7152991b45b81f090f970e945bf88def8093b8ecb9b250e9891cb6d88041f0a` (see `data/fetch_data.py`).
 - Stocks: `data/processed/stocks.csv` with both `close` and `adjClose` columns.
 - Environment: Python ≥ 3.11, Rust core built via `make rust-build` or `maturin develop --release`.
-- Test: `pytest tests/test_article_reproduction.py` (7/7 must pass on master).
+- Test: `pytest tests/oracles/test_article_reproduction.py` (7/7 must pass on master).
 - Invariant guard (recommended): set `engine.assert_invariants = True` when reproducing — the strategy's runtime will fail the run loudly if either the cash-flow or valuation invariant trips.
 
 ## What this *isn't*

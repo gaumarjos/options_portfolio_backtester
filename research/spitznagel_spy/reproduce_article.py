@@ -6,7 +6,7 @@ Usage:
     python research/spitznagel_spy/reproduce_article.py
 
 Prints each table to stdout in the order it appears in the article. Numbers
-match what tests/test_article_reproduction.py pins, with the same engine
+match what tests/oracles/test_article_reproduction.py pins, with the same engine
 configuration:
 
     - Strike-based 40-45% OTM puts (strike between 55% and 60% of spot)
@@ -335,7 +335,7 @@ def main():
              [f"{_ann(b):+.2f}", f"{_ann(b) - spy_ann:+.2f}", f"{_maxdd(b):+.1f}"])
 
     print("\nAll tables produced. Numbers should match the article within "
-          "the tolerances in tests/test_article_reproduction.py "
+          "the tolerances in tests/oracles/test_article_reproduction.py "
           "(0.5pp annual, 1.0pp max DD, 0.05 Sharpe).")
 
 

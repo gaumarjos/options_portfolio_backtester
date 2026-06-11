@@ -48,7 +48,7 @@ from options_portfolio_backtester.data.providers import (
     TiingoData,
 )
 
-DATA_ROOT = Path(__file__).resolve().parent.parent / "data" / "processed"
+DATA_ROOT = Path(__file__).resolve().parent.parent.parent / "data" / "processed"
 # Parquet is the canonical processed format: ~30x faster to load than the
 # CSV (~0.4s vs ~15s for the 17-year chain) and kept date-aligned by
 # fetch_data.align_dates() since PR #107.
