@@ -5,7 +5,7 @@ in backtester/test/test_data/, but covering 500 trading days with fixed
 strikes per expiration cycle (like real listed options).
 
 Usage:
-    python -m tests.bench.generate_test_data
+    python -m tests.heavy.generate_test_data
 """
 
 from __future__ import annotations

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.bench._test_helpers import (
+from tests.heavy._test_helpers import (
     RUST_AVAILABLE,
     DEFAULT_ALLOC,
     DEFAULT_CAPITAL,

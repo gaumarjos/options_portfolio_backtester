@@ -382,7 +382,7 @@ class BacktestEngine:
         :meth:`run` to capture everything needed to reproduce or audit this
         run.
         """
-        from options_portfolio_backtester.results import BacktestResults
+        from options_portfolio_backtester.analytics.results import BacktestResults
         return BacktestResults(
             balance=getattr(self, "balance", pd.DataFrame()),
             trade_log=getattr(self, "trade_log", None),

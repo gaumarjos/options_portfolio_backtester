@@ -5,7 +5,7 @@ OptionsDX provides one row per strike/date/expiry with both call and put data
 in wide format. The backtester expects one row per contract in long format.
 
 Usage:
-    python data/convert_optionsdx.py data/raw/spx_eod.csv --output data/processed/spx_options.csv
+    python scripts/convert_optionsdx.py data/raw/spx_eod.csv --output data/processed/spx_options.csv
 """
 
 import argparse

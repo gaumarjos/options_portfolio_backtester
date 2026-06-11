@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from options_portfolio_backtester.results import BacktestResults, hash_data_file
+from options_portfolio_backtester.analytics.results import BacktestResults, hash_data_file
 
 
 def _flat_balance(annual_return: float, years: float = 1.0, n: int = 252) -> pd.DataFrame:

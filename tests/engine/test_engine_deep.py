@@ -45,7 +45,7 @@ from options_portfolio_backtester.core.types import (
     Greeks,
 )
 
-TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "test_data")
+TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures")
 STOCKS_FILE = os.path.join(TEST_DIR, "ivy_5assets_data.csv")
 OPTIONS_FILE = os.path.join(TEST_DIR, "options_data.csv")
 

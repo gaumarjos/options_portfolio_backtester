@@ -59,7 +59,7 @@ requires_data = pytest.mark.skipif(
     not (OPTIONS_PARQUET.exists() and STOCKS_CSV.exists()),
     reason=(
         "Article-reproduction tests need processed SPY data. Run "
-        "'python data/fetch_data.py all --symbols SPY' before invoking them."
+        "'python scripts/fetch_data.py all --symbols SPY' before invoking them."
     ),
 )
 

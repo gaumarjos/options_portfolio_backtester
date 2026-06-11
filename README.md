@@ -21,12 +21,12 @@ make install-dev
 ### Get data
 
 ```shell
-python data/fetch_data.py all --symbols SPY
+python scripts/fetch_data.py all --symbols SPY
 ```
 
 Downloads SPY stock prices and options chains to `data/processed/`. Supports 104+ symbols. See [`data/README.md`](data/README.md) for details.
 
-The canonical SPY parquets are pinned by SHA-256 in `data/fetch_data.py`:
+The canonical SPY parquets are pinned by SHA-256 in `scripts/fetch_data.py`:
 
 - `SPY_options.parquet`: `a7152991b45b81f090f970e945bf88def8093b8ecb9b250e9891cb6d88041f0a`
 - `SPY_underlying.parquet`: `847e60a441eb10969d87cd4a6da604257b782d9076168f68d5730b84096c79db`
@@ -182,16 +182,16 @@ Python engine path itself; those numbers are no longer reproducible.)
 
 ```shell
 # SPY stock + options data
-python data/fetch_data.py all --symbols SPY
+python scripts/fetch_data.py all --symbols SPY
 
 # Multiple symbols
-python data/fetch_data.py all --symbols SPY IWM QQQ --start 2020-01-01 --end 2023-01-01
+python scripts/fetch_data.py all --symbols SPY IWM QQQ --start 2020-01-01 --end 2023-01-01
 
 # FRED macro signals (VIX, GDP, Buffett Indicator, etc.)
-python data/fetch_signals.py
+python scripts/fetch_signals.py
 
 # Convert OptionsDX format
-python data/convert_optionsdx.py data/raw/spx_eod_2020.csv --output data/processed/spx_options.csv
+python scripts/convert_optionsdx.py data/raw/spx_eod_2020.csv --output data/processed/spx_options.csv
 ```
 
 You can also bring your own CSVs. Required columns:

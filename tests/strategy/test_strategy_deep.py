@@ -44,7 +44,7 @@ from options_portfolio_backtester.portfolio.portfolio import Portfolio, StockHol
 from options_portfolio_backtester.portfolio.position import OptionPosition, PositionLeg
 from options_portfolio_backtester.portfolio.greeks import aggregate_greeks
 
-TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "test_data")
+TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures")
 OPTIONS_FILE = os.path.join(TEST_DIR, "options_data.csv")
 
 

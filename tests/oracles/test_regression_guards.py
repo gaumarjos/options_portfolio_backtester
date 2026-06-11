@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 
 from options_portfolio_backtester import BacktestEngine
-from tests.bench._test_helpers import (
+from tests.heavy._test_helpers import (
     DEFAULT_CAPITAL,
     ivy_stocks,
     load_small_stocks,
@@ -77,7 +77,7 @@ class TestUnknownConfigRejected:
 
 class TestRuntimeInvariantsInDefaultSuite:
     """The class-A (cash-flow) and class-B (valuation) in-engine guards must
-    hold on a standard run. The SPY-scale version lives in tests/bench; this
+    hold on a standard run. The SPY-scale version lives in tests/heavy; this
     small-data version makes sure every default `pytest` run exercises the
     invariant code path at all."""
 

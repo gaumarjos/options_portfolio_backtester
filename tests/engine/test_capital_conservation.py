@@ -28,7 +28,7 @@ from options_portfolio_backtester.execution.cost_model import NoCosts
 from options_portfolio_backtester.strategy.strategy import Strategy
 from options_portfolio_backtester.strategy.strategy_leg import StrategyLeg
 
-TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "test_data")
+TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures")
 STOCKS_FILE = os.path.join(TEST_DIR, "ivy_5assets_data.csv")
 OPTIONS_FILE = os.path.join(TEST_DIR, "options_data.csv")
 

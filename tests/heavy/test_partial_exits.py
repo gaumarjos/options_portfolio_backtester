@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from tests.bench._test_helpers import (
+from tests.heavy._test_helpers import (
     RUST_AVAILABLE,
     DEFAULT_CAPITAL,
     generated_stocks,

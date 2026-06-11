@@ -30,7 +30,7 @@ from options_portfolio_backtester.strategy.presets import (
 )
 
 # Results
-from options_portfolio_backtester.results import BacktestResults, hash_data_file
+from options_portfolio_backtester.analytics.results import BacktestResults, hash_data_file
 
 # Execution
 from options_portfolio_backtester.execution.cost_model import (

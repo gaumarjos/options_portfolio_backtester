@@ -10,7 +10,7 @@ from options_portfolio_backtester.data.providers import (
 )
 from options_portfolio_backtester.data.schema import Schema
 
-TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "test_data")
+TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures")
 STOCKS_FILE = os.path.join(TEST_DIR, "test_data_stocks.csv")
 OPTIONS_FILE = os.path.join(TEST_DIR, "test_data_options.csv")
 

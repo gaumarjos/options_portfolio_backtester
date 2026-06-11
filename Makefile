@@ -2,14 +2,14 @@ NIX_CMD := XDG_CACHE_HOME=$(CURDIR)/.cache nix --extra-experimental-features 'ni
 RUNCMD := $(NIX_CMD)
 PYTHON := python
 
-.PHONY: test test-bench lint typecheck notebooks rust-build rust-test rust-bench bench install-dev compare-bt benchmark-matrix walk-forward-report parity-gate bench-rust-vs-python help
+.PHONY: test test-heavy lint typecheck notebooks rust-build rust-test rust-bench bench install-dev compare-bt benchmark-matrix walk-forward-report parity-gate help
 .DEFAULT_GOAL := help
 
 test: ## Run all tests
 	$(RUNCMD) $(PYTHON) -m pytest -v tests
 
-test-bench: ## Run benchmark/property tests
-	$(RUNCMD) $(PYTHON) -m pytest -v -m bench tests/bench
+test-heavy: ## Run heavy at-scale correctness tests (needs data)
+	$(RUNCMD) $(PYTHON) -m pytest -v -m heavy tests/heavy -o addopts=""
 
 lint: ## Run ruff linter
 	$(RUNCMD) $(PYTHON) -m ruff check options_portfolio_backtester
@@ -34,7 +34,7 @@ rust-bench: ## Run Rust benchmarks (criterion)
 	$(RUNCMD) bash -c 'cd rust && cargo bench'
 
 bench: rust-build ## Run Python benchmarks (requires Rust build)
-	$(RUNCMD) $(PYTHON) -m pytest tests/bench/ -v -m bench --benchmark-only 2>/dev/null || \
+	$(RUNCMD) $(PYTHON) -m pytest tests/heavy/ -v -m heavy --benchmark-only 2>/dev/null || \
 		echo "Install pytest-benchmark for Python benchmarks"
 
 install-dev: ## Install local dev deps into active nix dev environment
@@ -55,11 +55,9 @@ benchmark-matrix: ## Run standardized runtime/accuracy matrix vs bt
 walk-forward-report: ## Run walk-forward/OOS harness and save report
 	$(RUNCMD) $(PYTHON) scripts/walk_forward_report.py
 
-bench-rust-vs-python: ## Benchmark Rust vs Python vs bt (options + stock-only)
-	$(RUNCMD) $(PYTHON) scripts/benchmark_rust_vs_python.py --stock-only
 
 parity-gate: ## Run bt overlap parity CI gate (bench marker)
-	$(RUNCMD) $(PYTHON) -m pytest -v tests/compat/test_bt_overlap_gate.py -m bench
+	$(RUNCMD) $(PYTHON) -m pytest -v tests/compat/test_bt_overlap_gate.py -m heavy
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) |\

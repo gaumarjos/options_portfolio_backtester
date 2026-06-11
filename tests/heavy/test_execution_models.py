@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.bench._test_helpers import (
+from tests.heavy._test_helpers import (
     RUST_AVAILABLE,
     DEFAULT_ALLOC,
     DEFAULT_CAPITAL,
@@ -19,7 +19,7 @@ from tests.bench._test_helpers import (
 
 pytestmark = [
     pytest.mark.skipif(not RUST_AVAILABLE, reason="Rust extension not installed"),
-    pytest.mark.bench,
+    pytest.mark.heavy,
 ]
 
 
@@ -72,7 +72,7 @@ class TestRiskConstraints:
 
 class TestExitThresholds:
     def test_profit_exit(self):
-        from tests.bench._test_helpers import (
+        from tests.heavy._test_helpers import (
             _make_engine, load_small_stocks, load_small_options, ivy_stocks,
         )
         eng = _make_engine(
@@ -84,7 +84,7 @@ class TestExitThresholds:
         assert_invariants(eng)
 
     def test_loss_exit(self):
-        from tests.bench._test_helpers import (
+        from tests.heavy._test_helpers import (
             _make_engine, load_small_stocks, load_small_options, ivy_stocks,
         )
         eng = _make_engine(

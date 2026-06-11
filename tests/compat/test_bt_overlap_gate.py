@@ -7,7 +7,7 @@ import pytest
 from benchmarks.compare_with_bt import normalize_weights, run_bt, run_options_portfolio_backtester
 
 
-@pytest.mark.bench
+@pytest.mark.heavy
 def test_bt_overlap_gate_stock_only():
     stocks_file = Path("data/processed/stocks.csv")
     if not stocks_file.exists():

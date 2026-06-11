@@ -31,7 +31,7 @@ jobs:
       # the SPY dataset (data-dependent tests skip themselves). SPY-gated
       # tests run in the article-reproduction job below, with caching.
       - name: Run tests
-        run: python -m pytest -v tests/ --ignore=tests/bench --ignore=tests/compat --ignore=tests/oracles/test_article_reproduction.py
+        run: python -m pytest -v tests/ --ignore=tests/heavy --ignore=tests/compat --ignore=tests/oracles/test_article_reproduction.py
       - name: Type check (informational)
         # The codebase has ~90 pre-existing mypy errors under modern
         # pandas-stubs; the old nix CI only passed because nixpkgs pinned
@@ -72,7 +72,7 @@ jobs:
             data/processed/stocks.csv
             data/processed/stocks.parquet
           # Key is derived from the canonical SHA-256 hashes pinned in
-          # data/fetch_data.py (CANONICAL_HASHES, data-v1 release):
+          # scripts/fetch_data.py (CANONICAL_HASHES, data-v1 release):
           #   SPY_options.parquet    a7152991b45b...
           #   SPY_underlying.parquet 847e60a441eb...
           # plus the fetch date range below. Bump this key manually whenever
@@ -81,7 +81,7 @@ jobs:
 
       - name: Download pinned SPY dataset
         if: steps.data-cache.outputs.cache-hit != 'true'
-        run: python data/fetch_data.py all --symbols SPY --start 2008-01-02 --end 2024-12-31
+        run: python scripts/fetch_data.py all --symbols SPY --start 2008-01-02 --end 2024-12-31
 
       - name: Remove options.csv (tests read options.parquet; keeps cache and disk small)
         if: steps.data-cache.outputs.cache-hit != 'true'
@@ -96,4 +96,4 @@ jobs:
       - name: Run data-dependent invariant tests
         # Some test classes skip themselves when generated-data files are
         # absent; that is expected in CI.
-        run: python -m pytest tests/bench/test_invariants.py -q -o addopts=""
+        run: python -m pytest tests/heavy/test_invariants.py -q -o addopts=""

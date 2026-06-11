@@ -142,7 +142,7 @@ anchored on the commit hash that introduced the change.
   removed; the deprecation of ``options_budget_pct`` (see API changes)
   exists precisely to make this class of misconfiguration loud.
 - **Exit-price envelope oracle (independent class-B check).**
-  ``tests/bench/test_invariants.py::TestExitPriceEnvelope`` reconstructs,
+  ``tests/heavy/test_invariants.py::TestExitPriceEnvelope`` reconstructs,
   in pandas directly from the raw CSVs, the price bound every trade-log
   exit must satisfy: quoted contracts must exit inside the day's
   [bid, ask]; unquoted (expired/missing) contracts must exit at no more
@@ -190,7 +190,7 @@ anchored on the commit hash that introduced the change.
     regression back to the adjusted close. A cash check cannot see this
     class — both proceeds and mark use the same wrong price, so the
     ledger stays balanced; it needs its own valuation guard.
-  Exercised by ``tests/bench/test_invariants.py::TestRuntimeInvariantChecks``
+  Exercised by ``tests/heavy/test_invariants.py::TestRuntimeInvariantChecks``
   across the budget configurations where both bugs originally lived.
 
 ### Budget API clarification
@@ -239,7 +239,7 @@ anchored on the commit hash that introduced the change.
 - `HistoricalOptionsData` and `TiingoData` now accept `.parquet`
   files in addition to `.csv` and `.h5`. The SPY option chain loads
   in ~0.4s as parquet vs ~15s as CSV. (commit `e6605ec`)
-- `data/fetch_data.py` writes both `processed/options.csv` and
+- `scripts/fetch_data.py` writes both `processed/options.csv` and
   `processed/options.parquet`. Existing CSV-using code continues to
   work unchanged. Pass `--allow-fallback` to permit the secondary
   mirrors (options-data CDN, dataset-hist repo, yfinance) when the
@@ -249,6 +249,26 @@ anchored on the commit hash that introduced the change.
   downloader warns on hash mismatch. (commit `60e6e91`)
 
 ### Internal
+- **Directory tidy (renames; import/path updates throughout).**
+  - ``tests/bench/`` → ``tests/heavy/`` and the ``bench`` pytest marker
+    → ``heavy``: the tier holds data-heavy *correctness* tests, not
+    benchmarks (performance benchmarks live in ``/benchmarks``). The
+    Makefile target is now ``make test-heavy``.
+  - ``tests/test_data/`` → ``tests/fixtures/`` (committed small CSVs;
+    distinct from gitignored ``tests/_generated/``).
+  - ``data/fetch_data.py``, ``fetch_signals.py``, ``convert_optionsdx.py``
+    → ``scripts/``: ``data/`` is now purely storage (``raw/`` cache +
+    ``processed/`` outputs); executable tooling lives in ``scripts/``.
+    ``fetch_data`` still writes to ``<repo>/data`` regardless of its own
+    location.
+  - ``options_portfolio_backtester/results.py`` →
+    ``options_portfolio_backtester/analytics/results.py`` (its unit test
+    moved to the mirrored ``tests/analytics/``). The top-level re-exports
+    (``from options_portfolio_backtester import BacktestResults,
+    hash_data_file``) are unchanged; only the deep module path moved.
+  - Deleted the Makefile ``bench-rust-vs-python`` target (script removed
+    earlier) and fixed ``data/README.md``'s stale example importing the
+    pre-rename ``backtester.datahandler`` package.
 - **Removed the last remnant of the Python valuation engine.**
   ``BacktestEngine._current_options_capital`` and
   ``_get_current_option_quotes`` had no production callers since the
@@ -277,7 +297,7 @@ anchored on the commit hash that introduced the change.
   `tests/oracles/` (golden scenario, regression guards, engine fuzzing,
   article reproduction), and `tests/README.md` documents the tier model
   (unit mirrors the package; oracles check against engine-independent
-  references; `tests/bench/` is the data-heavy opt-in tier — historically
+  references; `tests/heavy/` is the data-heavy opt-in tier — historically
   misnamed, it holds correctness tests, not benchmarks). All live path
   references (Makefile, CI, docs, reproduce_article.py) updated;
   historical CHANGELOG entries keep their original paths.
@@ -302,7 +322,7 @@ anchored on the commit hash that introduced the change.
   is designed to pass with data-dependent tests skipping.
 - **Parquet is the canonical processed format.** The SPY-scale test
   fixtures (``tests/oracles/test_article_reproduction.py``,
-  ``tests/bench/test_invariants.py``) now load
+  ``tests/heavy/test_invariants.py``) now load
   ``data/processed/options.parquet`` instead of the 3.3GB CSV — ~30x
   faster load (~0.4s vs ~15s), cutting the reproduction suite from ~37s
   to ~25s and shrinking the CI cache. The CSV is still written by

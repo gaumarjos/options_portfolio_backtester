@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tests.bench._test_helpers import (
+from tests.heavy._test_helpers import (
     RUST_AVAILABLE,
     DEFAULT_ALLOC,
     DEFAULT_CAPITAL,
@@ -120,15 +120,15 @@ class TestBalanceColumns:
 
 import os as _os_guard
 
-from tests.bench._test_helpers import _DATA_DIR as _GUARD_DATA_DIR
+from tests.heavy._test_helpers import _DATA_DIR as _GUARD_DATA_DIR
 
 _needs_generated = pytest.mark.skipif(
     not _os_guard.path.exists(_os_guard.path.join(_GUARD_DATA_DIR, "large_stocks.csv")),
-    reason="needs generated data: python tests/bench/generate_test_data.py",
+    reason="needs generated data: python tests/heavy/generate_test_data.py",
 )
 _needs_prod_slice = pytest.mark.skipif(
     not _os_guard.path.exists(_os_guard.path.join(_GUARD_DATA_DIR, "prod_stocks_1y.csv")),
-    reason="needs prod slice data: python tests/bench/extract_prod_slices.py",
+    reason="needs prod slice data: python tests/heavy/extract_prod_slices.py",
 )
 
 
@@ -207,7 +207,7 @@ _SPY_OPTS = _os.path.join(_PROCESSED, "options.parquet")
 _SPY_STX = _os.path.join(_PROCESSED, "stocks.csv")
 _needs_spy = pytest.mark.skipif(
     not (_os.path.exists(_SPY_OPTS) and _os.path.exists(_SPY_STX)),
-    reason="needs processed SPY data: python data/fetch_data.py all --symbols SPY",
+    reason="needs processed SPY data: python scripts/fetch_data.py all --symbols SPY",
 )
 
 
@@ -252,7 +252,7 @@ class TestRuntimeInvariantChecks:
     def test_small_dataset_invariants_hold(self):
         # Fast self-funded-path check on the bundled small dataset: enabling the
         # invariants must not false-positive on a standard backtest.
-        from tests.bench._test_helpers import (
+        from tests.heavy._test_helpers import (
             load_small_stocks, load_small_options, ivy_stocks, buy_put_strategy,
         )
         opts = load_small_options()

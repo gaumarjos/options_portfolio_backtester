@@ -7,7 +7,7 @@ with one or more of the five bug classes still active).
 This document is the single authoritative reference for what the engine
 produces for Spitznagel-style tail-hedge strategies after all known bugs
 were fixed. Numbers are reproducible against the 17-year SPY parquet
-pinned in `data/fetch_data.py` and the engine at `master` after the
+pinned in `scripts/fetch_data.py` and the engine at `master` after the
 filter-column fix is merged (PR #103) — or any later commit that
 preserves the four engine corrections summarized below.
 
@@ -91,7 +91,7 @@ under the relevant "Behavioral changes" / "Bug fixes" section.
 Two runtime invariants (`assert_invariants`) were added as
 defense-in-depth — one for cash-flow asymmetry, one for valuation —
 to catch regressions of bugs 1 and 2 immediately rather than years
-later in a published reproduction. See `tests/bench/test_invariants.py`.
+later in a published reproduction. See `tests/heavy/test_invariants.py`.
 
 ## Exact strategy specification
 
@@ -380,7 +380,7 @@ variants; none improved on the base.
 ## Reproducibility checklist
 
 - Engine: backtester at any commit with PR #102 (intrinsic + check_exits_daily) AND PR #103 (filter columns) merged. As of writing, PR #102 is on master; PR #103 is open.
-- Data: SPY parquet pinned to SHA-256 `a7152991b45b81f090f970e945bf88def8093b8ecb9b250e9891cb6d88041f0a` (see `data/fetch_data.py`).
+- Data: SPY parquet pinned to SHA-256 `a7152991b45b81f090f970e945bf88def8093b8ecb9b250e9891cb6d88041f0a` (see `scripts/fetch_data.py`).
 - Stocks: `data/processed/stocks.csv` with both `close` and `adjClose` columns.
 - Environment: Python ≥ 3.11, Rust core built via `make rust-build` or `maturin develop --release`.
 - Test: `pytest tests/oracles/test_article_reproduction.py` (7/7 must pass on master).

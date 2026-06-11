@@ -17,7 +17,7 @@ configuration:
     - No profit target, no IV filter
 
 Requires the SPY parquet at data/processed/options.parquet, fetched via
-    python data/fetch_data.py all --symbols SPY
+    python scripts/fetch_data.py all --symbols SPY
 
 Runs in roughly two minutes on a laptop.
 """
@@ -162,7 +162,7 @@ def _print_fingerprint():
     """Engine version + commit + data hashes, so every published table is
     traceable to the exact code and the exact bytes that produced it."""
     import subprocess
-    from options_portfolio_backtester.results import hash_data_file
+    from options_portfolio_backtester.analytics.results import hash_data_file
     try:
         from importlib.metadata import version
         engine_version = version("options_portfolio_backtester")
@@ -185,7 +185,7 @@ def main():
     if not OPTIONS_PATH.exists() or not STOCKS_PATH.exists():
         raise SystemExit(
             f"Need processed SPY data at {DATA}. Run:\n"
-            f"    python data/fetch_data.py all --symbols SPY"
+            f"    python scripts/fetch_data.py all --symbols SPY"
         )
 
     _print_fingerprint()

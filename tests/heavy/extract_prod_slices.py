@@ -2,10 +2,10 @@
 """Extract diverse time-period slices from raw parquet data for parity testing.
 
 Reads raw options + underlying parquets and outputs backtester-format CSV slices
-into tests/data/. Uses the same column mapping as data/fetch_data.py.
+into tests/data/. Uses the same column mapping as scripts/fetch_data.py.
 
 Usage:
-    python tests/bench/extract_prod_slices.py
+    python tests/heavy/extract_prod_slices.py
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ SLICES = {
 }
 
 
-# ── Column mapping (matches data/fetch_data.py lines 259-278) ────────
+# ── Column mapping (matches scripts/fetch_data.py lines 259-278) ────────
 
 def _convert_options(opts: pd.DataFrame, symbol: str,
                      und_prices: pd.DataFrame | None) -> pd.DataFrame:

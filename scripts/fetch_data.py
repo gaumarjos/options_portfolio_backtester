@@ -11,10 +11,10 @@ Download priority (for each symbol):
   4. yfinance (last resort, stocks only)
 
 Usage:
-    python data/fetch_data.py all --symbols SPY --start 2020-01-01 --end 2023-01-01
-    python data/fetch_data.py stocks --symbols SPY --start 2020-01-01 --end 2023-01-01
-    python data/fetch_data.py options --symbols SPY --start 2020-01-01 --end 2023-01-01
-    python data/fetch_data.py all --symbols SPY --start 2020-01-01 --end 2023-01-01 --update
+    python scripts/fetch_data.py all --symbols SPY --start 2020-01-01 --end 2023-01-01
+    python scripts/fetch_data.py stocks --symbols SPY --start 2020-01-01 --end 2023-01-01
+    python scripts/fetch_data.py options --symbols SPY --start 2020-01-01 --end 2023-01-01
+    python scripts/fetch_data.py all --symbols SPY --start 2020-01-01 --end 2023-01-01 --update
 """
 
 import argparse
@@ -25,7 +25,8 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
-BASE_DIR = Path(__file__).resolve().parent
+# Data lives in <repo>/data regardless of where this script lives.
+BASE_DIR = Path(__file__).resolve().parent.parent / "data"
 RAW_DIR = BASE_DIR / "raw"
 PROCESSED_DIR = BASE_DIR / "processed"
 
