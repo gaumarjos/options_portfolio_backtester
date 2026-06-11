@@ -6,7 +6,8 @@ and aligns dates between datasets.
 
 Download priority (for each symbol):
   1. Self-hosted GitHub Release (lambdaclass/options_backtester data-v1)
-  2. philippdubach/options-data CDN — 104 symbols
+  2. philippdubach/options-data CDN — DEFUNCT as of 2026-06 (404 for all
+     symbols; the GitHub repo is gone too). Kept for reference only.
   3. philippdubach/options-dataset-hist — SPY/IWM/QQQ underlying prices
   4. yfinance (last resort, stocks only)
 
