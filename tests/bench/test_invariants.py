@@ -200,10 +200,10 @@ from options_portfolio_backtester.data.providers import (
 from options_portfolio_backtester.core.types import Stock as _Stock
 
 _PROCESSED = _os.path.join(_os.path.dirname(__file__), "..", "..", "data", "processed")
-# CSV pair (not parquet): these are the date-aligned outputs the article
-# reproduction uses; the parquet carries one extra quotedate that trips the
-# engine's stock/option date-alignment assert.
-_SPY_OPTS = _os.path.join(_PROCESSED, "options.csv")
+# Parquet is the canonical processed format (~30x faster to load than the
+# CSV). fetch_data.align_dates() keeps it date-aligned with stocks.csv
+# since PR #107; before that fix the parquet carried an extra quotedate.
+_SPY_OPTS = _os.path.join(_PROCESSED, "options.parquet")
 _SPY_STX = _os.path.join(_PROCESSED, "stocks.csv")
 _needs_spy = pytest.mark.skipif(
     not (_os.path.exists(_SPY_OPTS) and _os.path.exists(_SPY_STX)),

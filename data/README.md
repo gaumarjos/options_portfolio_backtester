@@ -11,8 +11,11 @@ python data/fetch_data.py all --symbols SPY --start 2020-01-01 --end 2023-01-01
 ```
 
 Data is first fetched from the [self-hosted GitHub Release](https://github.com/lambdaclass/options_backtester/releases/tag/data-v1), falling back to [philippdubach/options-data](https://github.com/philippdubach/options-data) CDN and yfinance. Outputs:
-- `data/processed/stocks.csv` — Tiingo-format stock data
-- `data/processed/options.csv` — options data with Greeks
+- `data/processed/stocks.csv` / `stocks.parquet` — Tiingo-format stock data
+- `data/processed/options.parquet` — options data with Greeks (**canonical**: ~30x faster to load and ~6x smaller than the CSV; the tests and `reproduce_article.py` read this)
+- `data/processed/options.csv` — same content for tools that need CSV
+
+Both formats are written and kept date-aligned by the fetch; if they ever disagree, the parquet is the one the test suite trusts.
 
 ## Subcommands
 

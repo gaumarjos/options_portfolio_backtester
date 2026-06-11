@@ -49,11 +49,14 @@ from options_portfolio_backtester.data.providers import (
 )
 
 DATA_ROOT = Path(__file__).resolve().parent.parent / "data" / "processed"
-OPTIONS_CSV = DATA_ROOT / "options.csv"
+# Parquet is the canonical processed format: ~30x faster to load than the
+# CSV (~0.4s vs ~15s for the 17-year chain) and kept date-aligned by
+# fetch_data.align_dates() since PR #107.
+OPTIONS_PARQUET = DATA_ROOT / "options.parquet"
 STOCKS_CSV = DATA_ROOT / "stocks.csv"
 
 requires_data = pytest.mark.skipif(
-    not (OPTIONS_CSV.exists() and STOCKS_CSV.exists()),
+    not (OPTIONS_PARQUET.exists() and STOCKS_CSV.exists()),
     reason=(
         "Article-reproduction tests need processed SPY data. Run "
         "'python data/fetch_data.py all --symbols SPY' before invoking them."
@@ -100,7 +103,7 @@ ARTICLE_WINDOW_END = pd.Timestamp("2024-12-31")
 
 @pytest.fixture(scope="module")
 def options_data():
-    d = HistoricalOptionsData(str(OPTIONS_CSV))
+    d = HistoricalOptionsData(str(OPTIONS_PARQUET))
     date_col = d.schema["date"]
     d._data = d._data[d._data[date_col] <= ARTICLE_WINDOW_END]
     d.end_date = d._data[date_col].max()
