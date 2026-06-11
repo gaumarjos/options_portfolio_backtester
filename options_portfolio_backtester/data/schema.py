@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterator, Union
+from typing import TYPE_CHECKING, Any, Iterator, Union
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 class Schema:
