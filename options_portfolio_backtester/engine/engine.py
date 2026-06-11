@@ -24,8 +24,7 @@ import numpy as np
 import pandas as pd
 
 from options_portfolio_backtester.core.types import (
-    Direction, OptionType, Order, Signal, Greeks, Stock, StockAllocation,
-    get_order,
+    Direction, OptionType, Stock,
 )
 from options_portfolio_backtester.execution.cost_model import TransactionCostModel, NoCosts
 from options_portfolio_backtester.execution.fill_model import FillModel, MarketAtBidAsk
@@ -972,52 +971,6 @@ class BacktestEngine:
         )
         # Portfolio dataclass — dual-write alongside legacy DataFrames
         self._portfolio = Portfolio(initial_cash=0.0)
-
-    def _current_options_capital(self, options, stocks):
-        options_value = self._get_current_option_quotes(options)
-        values_by_row: Any = [0] * len(options_value[0])
-        if len(options_value[0]) != 0:
-            sym_col = self._stocks_schema["symbol"]
-            # Use unadjusted close for intrinsic value — strikes are raw prices
-            _close_col = self._stocks_schema["close"] if "close" in self._stocks_schema else None
-            price_col = _close_col if (_close_col and _close_col in stocks.columns) else self._stocks_schema["adjClose"]
-            for i, leg in enumerate(self._options_strategy.legs):
-                cost_series = options_value[i]["cost"].copy()
-                # Replace NaN (missing contracts) with intrinsic value
-                if cost_series.isna().any():
-                    inv_leg = self._options_inventory[leg.name]
-                    for idx in cost_series.index[cost_series.isna()]:
-                        opt_type = inv_leg.at[idx, "type"]
-                        strike = inv_leg.at[idx, "strike"]
-                        underlying = inv_leg.at[idx, "underlying"]
-                        spot_match = stocks.loc[stocks[sym_col] == underlying, price_col]
-                        spot = spot_match.iloc[0] if len(spot_match) > 0 else 0.0
-                        iv = _intrinsic_value(opt_type, float(strike), float(spot))
-                        cash_sign = -1.0 if ~leg.direction == Direction.SELL else 1.0
-                        cost_series.at[idx] = cash_sign * iv * self.shares_per_contract
-                values_by_row += cost_series.values
-            total: float = -sum(values_by_row * self._options_inventory["totals"]["qty"].values)
-        else:
-            total = 0
-        return total
-
-    def _get_current_option_quotes(self, options):
-        current_options_quotes: list[pd.DataFrame] = []
-        for leg in self._options_strategy.legs:
-            inventory_leg = self._options_inventory[leg.name]
-            leg_options = inventory_leg[["contract"]].merge(
-                options, how="left",
-                left_on="contract", right_on=leg.schema["contract"],
-            )
-            leg_options.index = self._options_inventory.index
-            leg_options["order"] = get_order(leg.direction, Signal.EXIT)
-            leg_options["cost"] = leg_options[self._options_schema[(~leg.direction).price_column]]
-
-            if ~leg.direction == Direction.SELL:
-                leg_options["cost"] = -leg_options["cost"]
-            leg_options["cost"] *= self.shares_per_contract
-            current_options_quotes.append(leg_options)
-        return current_options_quotes
 
     def __repr__(self) -> str:
         return (

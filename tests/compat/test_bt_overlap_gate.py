@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.compare_with_bt import normalize_weights, run_bt, run_options_portfolio_backtester
+from benchmarks.compare_with_bt import normalize_weights, run_bt, run_options_portfolio_backtester
 
 
 @pytest.mark.bench

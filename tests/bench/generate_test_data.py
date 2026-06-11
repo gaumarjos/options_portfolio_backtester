@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 SEED = 42
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "data"
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "_generated"
 
 # 7 stocks matching test_data_stocks.csv symbols
 STOCK_SYMBOLS = ["VOO", "TLT", "EWY", "PDBC", "IAU", "VNQI", "VTIP"]

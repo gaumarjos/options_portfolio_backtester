@@ -249,6 +249,29 @@ anchored on the commit hash that introduced the change.
   downloader warns on hash mismatch. (commit `60e6e91`)
 
 ### Internal
+- **Removed the last remnant of the Python valuation engine.**
+  ``BacktestEngine._current_options_capital`` and
+  ``_get_current_option_quotes`` had no production callers since the
+  Rust engine took over valuation; they were kept alive only by a test
+  that exercised the dead methods directly
+  (``tests/test_intrinsic_sign.py``, also removed — the behavior is
+  covered by Rust unit tests, the golden scenario, and the envelope
+  oracle). Dead code that *looks* like the live valuation path is
+  actively misleading. The ``_intrinsic_value`` helper stays (pure
+  function, separately unit-tested).
+- **Generated test data no longer dumps into the unit-test package.**
+  ``tests/data/`` is the unit-test package for the data module, but
+  ``generate_test_data.py`` / ``extract_prod_slices.py`` also wrote
+  their large regenerable CSVs there. They now write to
+  ``tests/_generated/`` (gitignored).
+- **Removed ``setup.cfg``** — its ``[mypy]`` section duplicated
+  ``[tool.mypy]`` in ``pyproject.toml`` (which takes precedence in
+  mypy's config discovery anyway); two sources of truth for the same
+  config.
+- **Fixed broken import in ``tests/compat``** —
+  ``test_bt_overlap_gate.py`` imported ``scripts.compare_with_bt``;
+  the module lives in ``benchmarks/`` (the ``scripts/`` directory no
+  longer exists).
 - **Test suite reorganized by intent.** The four cross-cutting
   correctness anchors moved from the `tests/` top level into
   `tests/oracles/` (golden scenario, regression guards, engine fuzzing,

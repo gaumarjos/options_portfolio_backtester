@@ -15,7 +15,7 @@ except ImportError:
     RUST_AVAILABLE = False
 
 _TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "test_data")
-_DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+_DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "_generated")
 
 # ── Constants ──────────────────────────────────────────────────────────
 

@@ -17,7 +17,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DATA_DIR = PROJECT_ROOT / "tests" / "data"
+DATA_DIR = PROJECT_ROOT / "tests" / "_generated"
 
 # ── Slice definitions ─────────────────────────────────────────────────
 

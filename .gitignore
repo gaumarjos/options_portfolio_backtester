@@ -112,8 +112,9 @@ venv.bak/
 _ob_rust.so
 mutants/
 
-# Large regenerable test data (from tests/bench/extract_prod_slices.py)
-tests/data/*.csv
+# Large regenerable test data (tests/bench/generate_test_data.py and
+# extract_prod_slices.py write here; tests/data/ is a unit-test package)
+tests/_generated/*.csv
 
 # exclude data from source control by default
 data/*
