@@ -118,6 +118,21 @@ class TestBalanceColumns:
 
 # ── Generated dataset invariants ───────────────────────────────────────
 
+import os as _os_guard
+
+from tests.bench._test_helpers import _DATA_DIR as _GUARD_DATA_DIR
+
+_needs_generated = pytest.mark.skipif(
+    not _os_guard.path.exists(_os_guard.path.join(_GUARD_DATA_DIR, "large_stocks.csv")),
+    reason="needs generated data: python tests/bench/generate_test_data.py",
+)
+_needs_prod_slice = pytest.mark.skipif(
+    not _os_guard.path.exists(_os_guard.path.join(_GUARD_DATA_DIR, "prod_stocks_1y.csv")),
+    reason="needs prod slice data: python tests/bench/extract_prod_slices.py",
+)
+
+
+@_needs_generated
 class TestGeneratedDataInvariants:
 
     @pytest.fixture(autouse=True)
@@ -141,6 +156,7 @@ class TestGeneratedDataInvariants:
 
 # ── Production SPY invariants ──────────────────────────────────────────
 
+@_needs_prod_slice
 class TestProductionDataInvariants:
 
     @pytest.fixture(autouse=True)
