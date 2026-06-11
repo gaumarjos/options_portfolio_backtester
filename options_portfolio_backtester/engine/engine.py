@@ -124,7 +124,12 @@ class BacktestEngine:
         # Rust engine. Off by default; intended for tests/debugging.
         self.assert_invariants: bool = False
 
-        self.options_budget_pct: float | None = None
+        # Per-REBALANCE external put budget (0.05 = 5% of NAV spent on options
+        # at every rebalance — with monthly rebalancing that is ~12x the
+        # annual figure). Most of the tail-hedge literature speaks in %/yr;
+        # use `options_budget_annual_pct` for that. The old, ambiguous name
+        # `options_budget_pct` survives as a deprecated alias (see property).
+        self.options_budget_per_rebalance_pct: float | None = None
         self.options_budget_annual_pct: float | None = None
         self._stocks: list[Stock] = []
         self._options_strategy: Strategy | None = None
@@ -165,6 +170,28 @@ class BacktestEngine:
                 f"unknown config (it would be silently ignored).{suggestion}"
             )
         object.__setattr__(self, name, value)
+
+    @property
+    def options_budget_pct(self) -> float | None:
+        """Deprecated alias for ``options_budget_per_rebalance_pct``.
+
+        The bare name reads as if it were annual, and that misreading made
+        it into a published table once (3.3%/month is ~40%/yr of premium).
+        Reads stay silent for back-compat; writes warn.
+        """
+        return self.options_budget_per_rebalance_pct
+
+    @options_budget_pct.setter
+    def options_budget_pct(self, value: float | None) -> None:
+        import warnings
+        warnings.warn(
+            "options_budget_pct is PER-REBALANCE, not annual, and is "
+            "deprecated — use options_budget_per_rebalance_pct (same "
+            "semantics) or options_budget_annual_pct (%/yr, what the "
+            "tail-hedge literature means).",
+            DeprecationWarning, stacklevel=2,
+        )
+        self.options_budget_per_rebalance_pct = value
 
     # -- Framing helpers ---------------------------------------------------
     # The two put-overlay framings in the literature map to two
@@ -211,7 +238,7 @@ class BacktestEngine:
         self._raw_allocation = {"stocks": stocks, "options": options, "cash": cash}
         self.allocation = dict(self._raw_allocation)
         self.options_budget_annual_pct = None
-        self.options_budget_pct = None
+        self.options_budget_per_rebalance_pct = None
         return self
 
     # -- Properties (same API as original Backtest) --
@@ -363,7 +390,7 @@ class BacktestEngine:
             config={
                 "allocation": dict(self.allocation),
                 "initial_capital": self.initial_capital,
-                "options_budget_pct": self.options_budget_pct,
+                "options_budget_pct": self.options_budget_per_rebalance_pct,
                 "options_budget_annual_pct": self.options_budget_annual_pct,
                 "max_notional_pct": self.max_notional_pct,
                 "stop_if_broke": self.stop_if_broke,
@@ -411,7 +438,7 @@ class BacktestEngine:
                 # If user set algos=[EngineRunMonthly()], it's a no-op for Rust.
                 pass
             elif isinstance(algo, BudgetPercent):
-                self.options_budget_pct = algo.pct
+                self.options_budget_per_rebalance_pct = algo.pct
             elif isinstance(algo, RangeFilter):
                 # Append range condition to each leg's entry filter as conjunction.
                 col, lo, hi = algo.column, algo.min_val, algo.max_val
@@ -554,7 +581,7 @@ class BacktestEngine:
             "signal_selector": self.signal_selector.to_rust_config(),
             "risk_constraints": [c.to_rust_config() for c in self.risk_manager.constraints],
             "sma_days": sma_days,
-            "options_budget_pct": self.options_budget_pct,
+            "options_budget_pct": self.options_budget_per_rebalance_pct,
             "options_budget_annual_pct": self.options_budget_annual_pct,
             "stop_if_broke": self.stop_if_broke,
             "max_notional_pct": self.max_notional_pct,
@@ -743,7 +770,7 @@ class BacktestEngine:
             "signal_selector": self.signal_selector.to_rust_config(),
             "risk_constraints": [c.to_rust_config() for c in self.risk_manager.constraints],
             "sma_days": sma_days,
-            "options_budget_pct": self.options_budget_pct,
+            "options_budget_pct": self.options_budget_per_rebalance_pct,
             "options_budget_annual_pct": self.options_budget_annual_pct,
             "stop_if_broke": self.stop_if_broke,
             "max_notional_pct": self.max_notional_pct,

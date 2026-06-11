@@ -53,7 +53,6 @@ strategy = deep_otm_put(options_data.schema, "SPY")
 engine = BacktestEngine({"stocks": 1.0, "options": 0.0, "cash": 0.0},
                        initial_capital=1_000_000)
 engine.use_external_budget(annual_pct=0.005)
-engine.options_budget_pct = 0.005
 engine.stocks = [Stock("SPY", 1.0)]
 engine.stocks_data = stocks_data
 engine.options_data = options_data
