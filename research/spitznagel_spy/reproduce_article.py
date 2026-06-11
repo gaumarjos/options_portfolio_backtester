@@ -158,12 +158,37 @@ def _row(label: str, fields: Iterable):
     print(f"  {label:38s} " + "  ".join(f"{f:>10s}" for f in fields))
 
 
+def _print_fingerprint():
+    """Engine version + commit + data hashes, so every published table is
+    traceable to the exact code and the exact bytes that produced it."""
+    import subprocess
+    from options_portfolio_backtester.results import hash_data_file
+    try:
+        from importlib.metadata import version
+        engine_version = version("options_portfolio_backtester")
+    except Exception:
+        engine_version = "unknown"
+    try:
+        commit = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip() or "unknown"
+    except Exception:
+        commit = "unknown"
+    print("=== Reproduction fingerprint ===")
+    print(f"  engine:  options_portfolio_backtester {engine_version} @ {commit}")
+    print(f"  options: sha256:{hash_data_file(OPTIONS_PATH)[:16]}…  ({OPTIONS_PATH.name})")
+    print(f"  stocks:  sha256:{hash_data_file(STOCKS_PATH)[:16]}…  ({STOCKS_PATH.name})")
+
+
 def main():
     if not OPTIONS_PATH.exists() or not STOCKS_PATH.exists():
         raise SystemExit(
             f"Need processed SPY data at {DATA}. Run:\n"
             f"    python data/fetch_data.py all --symbols SPY"
         )
+
+    _print_fingerprint()
 
     opts_data = HistoricalOptionsData(str(OPTIONS_PATH))
     stocks_data = TiingoData(str(STOCKS_PATH))

@@ -9,14 +9,62 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30
-      - name: Download data
-        run: nix develop --command python data/fetch_data.py all --symbols SPY --force
+      # No data download here: the default suite is designed to pass without
+      # the SPY dataset (data-dependent tests skip themselves). The previous
+      # "Download data" step also called fetch_data.py with a nonexistent
+      # --force flag and without the required --start/--end, so it could
+      # never have succeeded. SPY-gated tests run in the
+      # article-reproduction job below, with caching.
       - name: Run tests
         run: nix develop --command python -m pytest -v tests/ --ignore=tests/bench --ignore=tests/compat --ignore=tests/test_article_reproduction.py
       - name: Type check
         run: nix develop --command python -m mypy options_portfolio_backtester --ignore-missing-imports
+
+  # Gate merges on the published-article numbers and the data-dependent
+  # invariants. Runs as its own job so the fast unit-test job above is not
+  # slowed by the ~630MB pinned SPY dataset download or the longer suites.
+  article-reproduction:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+
+      - name: Restore pinned SPY dataset cache
+        id: data-cache
+        uses: actions/cache@v4
+        with:
+          # Cache only what the tests read: the engine-ready options parquet
+          # plus the stocks csv/parquet (~600MB total). The 3.3GB
+          # options.csv is deliberately excluded — it is deleted after the
+          # fetch step and never cached.
+          path: |
+            data/processed/options.parquet
+            data/processed/stocks.csv
+            data/processed/stocks.parquet
+          # Key is derived from the canonical SHA-256 hashes pinned in
+          # data/fetch_data.py (CANONICAL_HASHES, data-v1 release):
+          #   SPY_options.parquet    a7152991b45b...
+          #   SPY_underlying.parquet 847e60a441eb...
+          # plus the fetch date range below. Bump this key manually whenever
+          # the data-v1 release (and its hashes in fetch_data.py) changes.
+          key: spy-data-v1-a7152991-847e60a4-2008-01-02-2024-12-31
+
+      - name: Download pinned SPY dataset
+        if: steps.data-cache.outputs.cache-hit != 'true'
+        run: nix develop --command python data/fetch_data.py all --symbols SPY --start 2008-01-02 --end 2024-12-31
+
+      - name: Remove options.csv (tests read options.parquet; keeps cache and disk small)
+        if: steps.data-cache.outputs.cache-hit != 'true'
+        run: rm -f data/processed/options.csv
+
       - name: Verify published-article reproductions
         # If a backtester change moves a published-article number by more
         # than the test's tolerance, this step fails and the PR needs
         # either an article-side update or a backtester-side review.
-        run: nix develop --command python -m pytest -v tests/test_article_reproduction.py
+        run: nix develop --command python -m pytest tests/test_article_reproduction.py -q
+
+      - name: Run data-dependent invariant tests
+        # Some test classes skip themselves when generated-data files are
+        # absent; that is expected in CI.
+        run: nix develop --command python -m pytest tests/bench/test_invariants.py -q -o addopts=""

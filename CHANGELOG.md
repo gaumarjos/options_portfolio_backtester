@@ -123,6 +123,24 @@ anchored on the commit hash that introduced the change.
   SPY parquet, conversion cost is unchanged within noise.
 
 ### Invariants / defense-in-depth
+- **Golden hand-computed scenario** (``tests/test_golden_scenario.py``,
+  default suite, ~0.4s): a 9-day synthetic dataset (stock 100 → 50, one
+  strike-80 put, 5% per-rebalance external budget) whose correct final
+  capital — $1,950,030.00 — is derived by hand-arithmetic in comments
+  from first principles (floored share/contract sizing, net-zero
+  externally-funded entry, exit credits realized P&L) and asserted to the
+  cent, with runtime invariants armed. Two variants cover both exit
+  paths: quoted-bid and the expired-contract intrinsic fallback. This is
+  the anchor every other guard lacked: it catches value *vanishing*
+  (suppressed payoffs) as well as phantom money, because the expected
+  number comes from paper arithmetic, not from the engine's past output.
+- **README first-example budget misconfiguration fixed.** The example
+  called ``use_external_budget(annual_pct=0.005)`` and then also set
+  ``options_budget_pct = 0.005`` — and the per-rebalance knob overrides
+  the annual one in the engine, so the example silently configured ~6%/yr
+  instead of the 0.5%/yr its comment claimed. The redundant line is
+  removed; the deprecation of ``options_budget_pct`` (see API changes)
+  exists precisely to make this class of misconfiguration loud.
 - **Exit-price envelope oracle (independent class-B check).**
   ``tests/bench/test_invariants.py::TestExitPriceEnvelope`` reconstructs,
   in pandas directly from the raw CSVs, the price bound every trade-log
@@ -187,6 +205,14 @@ anchored on the commit hash that introduced the change.
   is ``docs/SPITZNAGEL_RECONSTRUCTION.md``.
 
 ### API changes
+- **`options_budget_pct` deprecated → `options_budget_per_rebalance_pct`.**
+  The bare name reads as if it were annual, and that misreading reached a
+  published table once (3.3%/month is ~40%/yr of premium). The new name
+  makes the per-rebalance semantics impossible to misread. The old name
+  remains a working alias: reads are silent, writes emit a
+  ``DeprecationWarning`` pointing at the new name (or at
+  ``options_budget_annual_pct`` for %/yr semantics). The Rust config key
+  is unchanged.
 - `BacktestEngine.use_external_budget(annual_pct)` and
   `BacktestEngine.use_allocation(stocks, options, cash)` —
   first-class helpers that configure the two put-overlay framings in
@@ -223,6 +249,39 @@ anchored on the commit hash that introduced the change.
   downloader warns on hash mismatch. (commit `60e6e91`)
 
 ### Tooling
+- **CI now gates merges on the published numbers.** New
+  ``article-reproduction`` job in ``.github/workflows/ci.yml`` restores
+  the pinned SPY dataset from an actions cache (~600MB, keyed on the
+  data-v1 SHA-256 hashes; cache miss re-downloads from the release) and
+  runs ``tests/test_article_reproduction.py`` plus the data-dependent
+  invariant/oracle suite on every push and PR. Previously the strongest
+  defenses (reproduction pins, runtime invariants at SPY scale, the
+  exit-price envelope oracle) only ran locally. Also removed the fast
+  ``test`` job's "Download data" step — it called ``fetch_data.py`` with
+  a nonexistent ``--force`` flag and without the required
+  ``--start/--end``, so it could never have succeeded; the default suite
+  is designed to pass with data-dependent tests skipping.
+- **Parquet is the canonical processed format.** The SPY-scale test
+  fixtures (``tests/test_article_reproduction.py``,
+  ``tests/bench/test_invariants.py``) now load
+  ``data/processed/options.parquet`` instead of the 3.3GB CSV — ~30x
+  faster load (~0.4s vs ~15s), cutting the reproduction suite from ~37s
+  to ~25s and shrinking the CI cache. The CSV is still written by
+  ``fetch_data.py`` for tools that need it; ``data/README.md`` documents
+  parquet as canonical.
+- **`reproduce_article.py` prints a reproduction fingerprint** — engine
+  version, git commit, and SHA-256 of the exact data files — so every
+  published table is traceable to the exact code and bytes that produced
+  it.
+- **Property-based engine fuzzing** (``tests/test_engine_fuzz.py``,
+  default suite, ~1s): hypothesis generates random small option chains
+  (including dividend-adjusted closes and contracts that vanish after
+  expiry) and random engine configs across allocation/budget/exit-mode
+  space, runs each with ``assert_invariants=True``, and asserts the
+  engine never violates its own cash-flow/valuation invariants and
+  produces structurally sane balances. Every historical bug here was "a
+  config nobody had pinned"; this samples the config space instead of
+  pinning points.
 - **`fetch_data.py` keeps parquet outputs in sync with date alignment.**
   ``align_dates()`` filtered the stock/option CSVs to their shared
   trading days but never rewrote the parquet twins, so
