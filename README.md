@@ -201,14 +201,17 @@ You can also bring your own CSVs. Required columns:
 ## Tests
 
 ```shell
-make test            # all tests (1300+)
-make test-regression # regression snapshots (locked golden values)
-make test-chaos      # fault injection (corrupted/adversarial data)
-make muttest         # mutation testing on core modules
+make test            # default suite (~1300 tests: unit + oracles + convexity)
+make test-heavy      # data-heavy at-scale correctness tests (needs SPY data)
+make verify-articles # reproduce all published-article tables and assert they match
 make lint            # ruff
-make typecheck       # mypy
+make typecheck       # mypy (informational; typing debt documented in CI)
 make rust-test       # Rust unit tests
+make rust-bench      # criterion performance benchmarks
 ```
+
+See [`tests/README.md`](tests/README.md) for the test-tier model (unit /
+oracles / heavy / convexity) and what each tier guards against.
 
 ## Architecture
 
@@ -220,7 +223,8 @@ options_portfolio_backtester/
 ├── execution/       # CostModel, FillModel, Sizer, SignalSelector
 ├── portfolio/       # Portfolio, OptionPosition, RiskManager
 ├── engine/          # BacktestEngine, AlgoPipelineBacktester, StrategyTreeEngine
-└── analytics/       # BacktestStats, TradeLog, TearsheetReport, charts
+├── convexity/       # Convexity scoring/backtest (used by presets)
+└── analytics/       # BacktestStats, BacktestResults, TradeLog, TearsheetReport, charts
 
 rust/
 ├── ob_core/         # Backtest loop, stats, execution models, filter parser
