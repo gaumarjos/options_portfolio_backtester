@@ -18,7 +18,8 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
-from options_portfolio_backtester.analytics.stats import BacktestStats
+from options_portfolio_backtester.analytics.results import returns_from_balance
+from options_portfolio_backtester.analytics.stats import BacktestStats, extended_stats
 
 
 @dataclass
@@ -137,6 +138,16 @@ class TearsheetReport:
         ]
         if drawdowns:
             sections += ["<h2>Top Drawdowns</h2>", drawdowns]
+        if self.balance is not None:
+            stress = stress_events_table(self.balance, self.benchmark_balance)
+            if not stress.empty:
+                formatted = stress.copy()
+                for col in formatted.columns:
+                    if col != "event":
+                        formatted[col] = formatted[col].map(
+                            lambda v: f"{v:+.1%}" if pd.notna(v) else "")
+                sections += ["<h2>Stress Events</h2>",
+                             formatted.to_html(classes="stress-events", index=False)]
 
         head_extra = ""
         if include_charts:
@@ -240,6 +251,35 @@ def drawdown_series(balance: pd.DataFrame) -> pd.Series:
     return (total - peak) / peak
 
 
+def stress_events_table(balance: pd.DataFrame,
+                        benchmark_balance: pd.DataFrame | None = None,
+                        windows: dict[str, tuple[str, str]] | None = None) -> pd.DataFrame:
+    """pyfolio's "interesting times" analysis: return and max drawdown per
+    stress event window, strategy vs benchmark. Windows outside the sample
+    are skipped."""
+    from options_portfolio_backtester.analytics.options_charts import DEFAULT_CRASH_WINDOWS
+
+    windows = windows or DEFAULT_CRASH_WINDOWS
+    rows = []
+    for label, (start, end) in windows.items():
+        window = balance.loc[start:end]
+        if window.empty:
+            continue
+        total = window["total capital"].dropna()
+        row = {
+            "event": label,
+            "strategy return": total.iloc[-1] / total.iloc[0] - 1,
+            "strategy max DD": ((total - total.cummax()) / total.cummax()).min(),
+        }
+        if benchmark_balance is not None and not benchmark_balance.empty:
+            bench = benchmark_balance.loc[start:end]["total capital"].dropna()
+            if not bench.empty:
+                row["benchmark return"] = bench.iloc[-1] / bench.iloc[0] - 1
+                row["benchmark max DD"] = ((bench - bench.cummax()) / bench.cummax()).min()
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def top_drawdowns(balance: pd.DataFrame | None, n: int = 5) -> pd.DataFrame:
     """The ``n`` worst drawdown episodes: peak, trough, recovery, depth, duration.
 
@@ -303,6 +343,21 @@ def build_tearsheet(
     trade_arr = None if trade_pnls is None else np.asarray(trade_pnls, dtype=float)
     stats = BacktestStats.from_balance(balance, trade_pnls=trade_arr, risk_free_rate=risk_free_rate)
     table = stats.to_dataframe()
+
+    # pyfolio-parity extras (stability, omega, VaR, alpha/beta) plus a
+    # side-by-side benchmark column when a benchmark is supplied.
+    rets = returns_from_balance(balance)
+    bench_rets = (returns_from_balance(benchmark_balance, name="benchmark")
+                  if benchmark_balance is not None else None)
+    for label, value in extended_stats(rets, bench_rets).items():
+        table.loc[label, "Value"] = value
+    if benchmark_balance is not None and not benchmark_balance.empty:
+        bench_table = BacktestStats.from_balance(benchmark_balance) \
+            .to_dataframe().rename(columns={"Value": "Benchmark"})
+        for label, value in extended_stats(bench_rets).items():
+            bench_table.loc[label, "Benchmark"] = value
+        table = table.join(bench_table, how="left")
+
     monthly = monthly_return_table(balance)
     dd = drawdown_series(balance)
     return TearsheetReport(

@@ -249,6 +249,16 @@ class BacktestStats:
             list(data.values()), index=list(data.keys()), columns=["Value"]
         )
 
+    def extended_stats_rows(self, returns: pd.Series,
+                            benchmark_returns: pd.Series | None = None) -> dict[str, float]:
+        """pyfolio-parity metrics computed from daily returns in Python
+        (not in the Rust core): stability, omega, daily VaR, alpha/beta.
+
+        Returned as ``{label: value}`` so callers can append them to the
+        :meth:`to_dataframe` table.
+        """
+        return extended_stats(returns, benchmark_returns)
+
     def summary(self) -> str:
         """Return a formatted text summary."""
         lines = [
@@ -286,3 +296,43 @@ class BacktestStats:
         if not data:
             return pd.DataFrame()
         return pd.DataFrame([data])
+
+
+def extended_stats(returns: pd.Series,
+                   benchmark_returns: pd.Series | None = None) -> dict[str, float]:
+    """pyfolio-parity metrics from daily returns.
+
+    - Stability: R² of a linear fit to log cumulative returns (how
+      line-like the compounding path is).
+    - Omega ratio: sum of gains over sum of losses around a 0 threshold.
+    - Daily VaR (95%): the 5th percentile daily return.
+    - Alpha (annualized) and beta vs the benchmark, when one is given.
+    """
+    out: dict[str, float] = {}
+    rets = returns.dropna()
+    if len(rets) < 2:
+        return out
+
+    log_cum = np.log1p(rets).cumsum()
+    if log_cum.std() > 0:
+        x = np.arange(len(log_cum), dtype=float)
+        corr = np.corrcoef(x, log_cum.values)[0, 1]
+        out["Stability (R²)"] = float(corr ** 2) if np.isfinite(corr) else 0.0
+    else:
+        out["Stability (R²)"] = 0.0
+
+    gains = rets[rets > 0].sum()
+    losses = -rets[rets < 0].sum()
+    out["Omega ratio"] = float(gains / losses) if losses > 0 else float("inf")
+
+    out["Daily VaR (95%)"] = float(rets.quantile(0.05))
+
+    if benchmark_returns is not None and len(benchmark_returns.dropna()) > 1:
+        aligned = pd.concat([rets, benchmark_returns], axis=1, join="inner").dropna()
+        if len(aligned) > 1:
+            strat, bench = aligned.iloc[:, 0], aligned.iloc[:, 1]
+            var = bench.var()
+            beta = float(strat.cov(bench) / var) if var > 0 else 0.0
+            out["Beta"] = beta
+            out["Alpha (annualized)"] = float((strat - beta * bench).mean() * 252)
+    return out

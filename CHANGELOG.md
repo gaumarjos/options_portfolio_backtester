@@ -53,6 +53,12 @@ anchored on the commit hash that introduced the change.
   domain clamped to ±10% so crash-payoff outliers don't wash out the
   scale. ``tests/oracles/test_article_figures.py`` pins the article's
   figure inputs in CI alongside the published numbers.
+- **pyfolio-parity stats.** New ``extended_stats()`` (stability R², omega
+  ratio, daily VaR 95%, alpha/beta vs benchmark) appended to the tearsheet
+  summary; the stats table gains a side-by-side ``Benchmark`` column when a
+  benchmark balance is supplied; new ``stress_events_table()`` — pyfolio's
+  "interesting times" view — reports return and max drawdown per crash
+  window for strategy and benchmark in the HTML report.
 - **Fix ``TradeLog.from_legacy_trade_log`` on Rust engine output.** The
   Rust engine emits the ``order`` column as plain strings (``"BTO"``)
   while the converter compared against the ``Order`` enum, so it

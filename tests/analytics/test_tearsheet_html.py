@@ -212,3 +212,57 @@ def test_thin_for_chart_keeps_endpoints():
     assert len(thinned) <= 2001
     assert thinned.index[0] == s.index[0]
     assert thinned.index[-1] == s.index[-1]
+
+
+# ---------------------------------------------------------------------------
+# pyfolio-parity stats: extras, benchmark column, stress events
+# ---------------------------------------------------------------------------
+
+def test_extended_stats_beta_one_vs_self():
+    from options_portfolio_backtester.analytics.stats import extended_stats
+    rets = returns_from_balance(_balance())
+    out = extended_stats(rets, rets)
+    assert abs(out["Beta"] - 1.0) < 1e-9
+    assert abs(out["Alpha (annualized)"]) < 1e-9
+    assert out["Daily VaR (95%)"] < 0
+    assert 0 <= out["Stability (R²)"] <= 1
+    assert out["Omega ratio"] > 0
+
+
+def test_stats_table_gains_extras_and_benchmark_column():
+    bal = _balance()
+    bench = bal.copy()
+    bench["total capital"] *= 0.97
+    report = build_tearsheet(bal, benchmark_balance=bench)
+    table = report.stats_table
+    assert "Benchmark" in table.columns
+    for label in ("Stability (R²)", "Omega ratio", "Daily VaR (95%)",
+                  "Beta", "Alpha (annualized)"):
+        assert label in table.index, label
+    # benchmark is a scaled copy: identical returns => beta 1 vs itself
+    assert abs(table.loc["Beta", "Value"] - 1.0) < 1e-6
+
+
+def test_stats_table_no_benchmark_keeps_single_column():
+    report = build_tearsheet(_balance())
+    assert list(report.stats_table.columns) == ["Value"]
+    assert "Beta" not in report.stats_table.index
+
+
+def test_stress_events_table_known_window():
+    from options_portfolio_backtester.analytics.tearsheet import stress_events_table
+    idx = pd.date_range("2020-01-01", periods=200, freq="B")
+    bal = pd.DataFrame({"total capital": np.linspace(100.0, 200.0, 200)}, index=idx)
+    bench = pd.DataFrame({"total capital": np.linspace(100.0, 50.0, 200)}, index=idx)
+    table = stress_events_table(bal, bench)
+    assert list(table["event"]) == ["COVID 2020"]
+    row = table.iloc[0]
+    assert row["strategy return"] > 0
+    assert row["benchmark return"] < 0
+    assert row["strategy max DD"] == 0.0  # monotonically rising
+    assert row["benchmark max DD"] < 0
+
+
+def test_stress_events_in_html():
+    html = build_tearsheet(_balance()).to_html(include_charts=False)
+    assert "Stress Events" in html and "COVID 2020" in html
