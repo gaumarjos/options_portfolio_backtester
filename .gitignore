@@ -127,3 +127,6 @@ data/raw/*
 data/processed/*
 !data/processed/.gitkeep
 !data/processed/signals.csv
+
+# Generated article figures (rebuild with research/spitznagel_spy/make_figures.py)
+research/spitznagel_spy/figures/

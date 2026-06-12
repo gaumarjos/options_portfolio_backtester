@@ -74,6 +74,36 @@ engine.options_strategy = near_atm_put_protection(schema, "SPY")
 
 See [`research/spitznagel_spy/FRAMINGS.md`](https://github.com/unbalancedparentheses/finance_research/blob/main/research/spitznagel_spy/FRAMINGS.md) in the companion repo for the difference between the two framings and what each one produces.
 
+### Reports and tearsheets
+
+One call produces a single self-contained HTML report with every panel —
+equity curve vs benchmark, underwater plot, rolling Sharpe/volatility,
+monthly heatmap, plus the options-specific panels (P&L attribution by leg,
+premium spend vs budget, crash-window zooms, per-trade P&L on a symlog
+scale, options exposure):
+
+```python
+from options_portfolio_backtester.analytics.tearsheet import build_tearsheet
+
+report = build_tearsheet(
+    engine.balance,
+    benchmark_balance=spy_engine.balance,   # optional
+    trade_log=engine.trade_log,             # optional, powers the trade panels
+    budget_annual_pct=0.033,                # optional, draws the budget rule
+)
+report.to_file("tearsheet.html")
+```
+
+Charts embed as static SVG when `vl-convert-python` is installed (the
+`charts` extra) — fully offline — and fall back to interactive vega-embed
+otherwise. For the full generic quantstats report (install the `reports`
+extra), every backtest exposes a clean daily-returns series:
+
+```python
+import quantstats as qs
+qs.reports.html(results.returns, benchmark_results.returns)
+```
+
 ### Strategy presets
 
 Instead of building legs manually:

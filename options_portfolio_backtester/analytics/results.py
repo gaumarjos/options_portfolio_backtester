@@ -42,6 +42,19 @@ class BacktestResults:
 
     # ---------------------------------------------------------------- properties
     @property
+    def returns(self) -> pd.Series:
+        """Daily returns of ``total capital`` as a clean ``pd.Series``.
+
+        DatetimeIndex, NaN-free, named ``"strategy"`` — the shape that
+        return-analytics libraries (quantstats, empyrical) expect, so a full
+        generic tearsheet is two lines:
+
+            >>> import quantstats as qs
+            >>> qs.reports.html(results.returns, benchmark_results.returns)
+        """
+        return returns_from_balance(self.balance, name="strategy")
+
+    @property
     def annual_return(self) -> float:
         """Compound annual growth rate of ``total capital`` (percentage)."""
         bal = self.balance["total capital"]
@@ -80,6 +93,21 @@ class BacktestResults:
             "engine_version": self.engine_version,
             "data_hash": self.data_hash,
         }
+
+
+def returns_from_balance(balance: pd.DataFrame, name: str = "strategy") -> pd.Series:
+    """Daily returns series from a balance frame's ``total capital`` column.
+
+    Returns an empty float series (with the given name) when the balance is
+    empty or lacks the column, so callers can branch on ``.empty`` instead of
+    catching KeyError.
+    """
+    if balance is None or balance.empty or "total capital" not in balance.columns:
+        return pd.Series(dtype=float, name=name)
+    total = balance["total capital"].dropna()
+    rets = total.pct_change().dropna()
+    rets.name = name
+    return rets
 
 
 def hash_data_file(path: str | Path, chunk_size: int = 65536) -> str:

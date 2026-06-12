@@ -138,3 +138,24 @@ class TestTradeLog:
             entry_order=Order.BTO, exit_order=Order.STC,
         )
         assert t.return_pct == 0.0
+
+
+def test_from_legacy_accepts_rust_string_orders():
+    """The Rust engine emits orders as strings ('BTO'), not Order enums."""
+    cols = pd.MultiIndex.from_tuples(
+        [("leg_1", f) for f in
+         ("contract", "underlying", "type", "strike", "cost", "order")]
+        + [("totals", f) for f in ("cost", "qty", "date")])
+    rows = [
+        ["SPY240119P00300000", "SPY", "put", 300.0, -500.0, "BTO",
+         -500.0, 1, pd.Timestamp("2023-06-01")],
+        ["SPY240119P00300000", "SPY", "put", 300.0, 250.0, "STC",
+         250.0, 1, pd.Timestamp("2023-09-01")],
+    ]
+    legacy = pd.DataFrame(rows, columns=cols)
+    tl = TradeLog.from_legacy_trade_log(legacy)
+    assert len(tl) == 1
+    trade = tl.trades[0]
+    assert trade.entry_price == 5.0
+    assert trade.exit_price == 2.5
+    assert trade.net_pnl == -250.0

@@ -21,6 +21,30 @@ anchored on the commit hash that introduced the change.
 
 ## Unreleased
 
+### API changes
+- **Tearsheet with embedded charts.** ``build_tearsheet`` now accepts
+  ``benchmark_balance``, ``trade_log`` (any representation: ``TradeLog``,
+  flat frame, or the legacy MultiIndex from ``engine.run()``), and
+  ``budget_annual_pct``; ``TearsheetReport`` gains ``charts()``,
+  ``to_file()``, and chart-embedding ``to_html()``. New
+  ``analytics/options_charts.py`` module with the options-specific
+  panels (P&L attribution by leg, premium spend vs budget, crash-window
+  zooms, per-trade symlog P&L, options exposure) and new generic charts
+  in ``analytics/charts.py`` (equity curve vs benchmark, underwater,
+  rolling Sharpe/volatility, Altair allocation chart). New
+  ``BacktestResults.returns`` property and ``returns_from_balance``
+  helper expose a quantstats-ready daily-returns series; new optional
+  dependency group ``reports = [quantstats]``, and ``vl-convert-python``
+  added to the ``charts`` extra for fully offline SVG reports.
+  ``research/spitznagel_spy/make_figures.py`` regenerates the article's
+  figures from the pinned engine configuration. See
+  ``docs/REPORTING_ROADMAP.md``.
+- **Fix ``TradeLog.from_legacy_trade_log`` on Rust engine output.** The
+  Rust engine emits the ``order`` column as plain strings (``"BTO"``)
+  while the converter compared against the ``Order`` enum, so it
+  recovered zero round-trip trades from any modern run. It now accepts
+  both representations.
+
 ### Behavioral changes
 - **Fix externally-funded exit accounting (the "free puts" bug).** In
   externally-funded budget mode (``options_budget_pct`` or

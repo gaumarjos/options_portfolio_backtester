@@ -54,7 +54,7 @@ STOCKS_PATH = DATA / "stocks.csv"
 INITIAL_CAPITAL = 1_000_000
 
 
-def _run(
+def build_article_engine(
     opts_data,
     stocks_data,
     schema,
@@ -65,11 +65,13 @@ def _run(
     dte_hi: int = 180,
     exit_dte: int = 30,
     budget: float = 0.033,
-    rebal_freq: int = 2,
-    rebal_unit: str = "BMS",
     profit_pct: float = math.inf,
-):
-    """Run a single backtest. Returns the daily total-capital series."""
+) -> BacktestEngine:
+    """Configure (but don't run) the article's engine.
+
+    Shared by the table reproduction below and make_figures.py, so the
+    figures are generated from the exact pinned configuration.
+    """
     bt = BacktestEngine(
         {"stocks": 1.0, "options": 0.0, "cash": 0.0},
         initial_capital=INITIAL_CAPITAL,
@@ -97,14 +99,11 @@ def _run(
     strat.add_leg(leg)
     strat.add_exit_thresholds(profit_pct=profit_pct, loss_pct=math.inf)
     bt.options_strategy = strat
-    bt.run(rebalance_freq=rebal_freq, rebalance_unit=rebal_unit)
-    series = bt.balance["total capital"].copy()
-    series.index = pd.to_datetime(series.index)
-    return series
+    return bt
 
 
-def _run_spy(opts_data, stocks_data, schema):
-    """SPY buy-and-hold baseline."""
+def build_spy_engine(opts_data, stocks_data, schema) -> BacktestEngine:
+    """Configure (but don't run) the SPY buy-and-hold baseline."""
     bt = BacktestEngine(
         {"stocks": 1.0, "options": 0.0, "cash": 0.0},
         initial_capital=INITIAL_CAPITAL,
@@ -113,6 +112,29 @@ def _run_spy(opts_data, stocks_data, schema):
     bt.stocks_data = stocks_data
     bt.options_data = opts_data
     bt.options_strategy = Strategy(schema)
+    return bt
+
+
+def _run(
+    opts_data,
+    stocks_data,
+    schema,
+    *,
+    rebal_freq: int = 2,
+    rebal_unit: str = "BMS",
+    **engine_kwargs,
+):
+    """Run a single backtest. Returns the daily total-capital series."""
+    bt = build_article_engine(opts_data, stocks_data, schema, **engine_kwargs)
+    bt.run(rebalance_freq=rebal_freq, rebalance_unit=rebal_unit)
+    series = bt.balance["total capital"].copy()
+    series.index = pd.to_datetime(series.index)
+    return series
+
+
+def _run_spy(opts_data, stocks_data, schema):
+    """SPY buy-and-hold baseline."""
+    bt = build_spy_engine(opts_data, stocks_data, schema)
     bt.run(rebalance_freq=1, rebalance_unit="BMS")
     series = bt.balance["total capital"].copy()
     series.index = pd.to_datetime(series.index)

@@ -112,18 +112,25 @@ def test_returns_histogram_serializes():
 
 
 def test_monthly_returns_heatmap_returns_chart():
-    """monthly_returns_heatmap should return a Chart with rect mark."""
+    """monthly_returns_heatmap returns annotated rects (LayerChart)."""
     report = _make_balance_report(days=250)
     chart = monthly_returns_heatmap(report)
-    assert isinstance(chart, alt.Chart)
+    assert isinstance(chart, alt.LayerChart)
 
 
 def test_monthly_returns_heatmap_serializes():
-    """Heatmap should serialize without errors."""
+    """Heatmap serializes with a rect layer, a text annotation layer, and
+    percentage tooltips on a zero-centered diverging scale (pyfolio style)."""
     report = _make_balance_report(days=250)
     chart = monthly_returns_heatmap(report)
     spec = chart.to_dict()
-    assert spec['mark'] == 'rect' or spec['mark']['type'] == 'rect'
+    marks = [layer['mark'] if isinstance(layer['mark'], str)
+             else layer['mark']['type'] for layer in spec['layer']]
+    assert 'rect' in marks and 'text' in marks
+    rect = next(l for l in spec['layer']
+                if (l['mark'] if isinstance(l['mark'], str) else l['mark']['type']) == 'rect')
+    assert rect['encoding']['tooltip']['format'] == '.2%'
+    assert rect['encoding']['color']['scale']['domainMid'] == 0
 
 
 def test_returns_chart_has_interval_and_point_params():

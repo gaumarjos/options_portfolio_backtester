@@ -67,11 +67,10 @@ class TradeLog:
 
         first_leg: str = trade_log.columns.levels[0][0]
 
-        order_bto = Order.BTO
-        order_sto = Order.STO
-        entry_mask = trade_log[first_leg].eval(
-            "(order == @order_bto) | (order == @order_sto)"
-        )
+        # The Rust engine emits orders as plain strings ("BTO"); the old
+        # Python engine used the Order enum. Accept both.
+        opening = {Order.BTO, Order.STO, Order.BTO.value, Order.STO.value}
+        entry_mask = trade_log[first_leg]["order"].isin(opening)
         entries = trade_log.loc[entry_mask]
         exits = trade_log.loc[~entry_mask]
 
@@ -109,6 +108,8 @@ class TradeLog:
             return pd.DataFrame()
         rows = []
         for t in self.trades:
+            entry_order = getattr(t.entry_order, "value", t.entry_order)
+            exit_order = getattr(t.exit_order, "value", t.exit_order)
             rows.append({
                 "contract": t.contract,
                 "underlying": t.underlying,
@@ -119,6 +120,9 @@ class TradeLog:
                 "entry_price": t.entry_price,
                 "exit_price": t.exit_price,
                 "quantity": t.quantity,
+                "shares_per_contract": t.shares_per_contract,
+                "entry_order": entry_order,
+                "exit_order": exit_order,
                 "gross_pnl": t.gross_pnl,
                 "net_pnl": t.net_pnl,
                 "return_pct": t.return_pct,
