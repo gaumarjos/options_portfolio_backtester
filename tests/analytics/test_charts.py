@@ -97,18 +97,23 @@ def test_returns_chart_serializes_to_dict():
 
 
 def test_returns_histogram_returns_chart():
-    """returns_histogram should return a Chart with bar mark."""
+    """returns_histogram returns bars + fitted-normal overlay (LayerChart)."""
     report = _make_balance_report()
     chart = returns_histogram(report)
-    assert isinstance(chart, alt.Chart)
+    assert isinstance(chart, alt.LayerChart)
 
 
 def test_returns_histogram_serializes():
-    """Histogram should serialize without errors."""
+    """Histogram serializes with symlog bar counts and a normal overlay."""
     report = _make_balance_report()
     chart = returns_histogram(report)
     spec = chart.to_dict()
-    assert spec['mark']['type'] == 'bar'
+    marks = [l['mark'] if isinstance(l['mark'], str) else l['mark']['type']
+             for l in spec['layer']]
+    assert 'bar' in marks and 'line' in marks
+    bar = next(l for l in spec['layer']
+               if (l['mark'] if isinstance(l['mark'], str) else l['mark']['type']) == 'bar')
+    assert bar['encoding']['y']['scale']['type'] == 'symlog'
 
 
 def test_monthly_returns_heatmap_returns_chart():

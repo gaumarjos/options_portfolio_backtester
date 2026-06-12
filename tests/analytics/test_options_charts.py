@@ -9,9 +9,10 @@ from options_portfolio_backtester.analytics.options_charts import (
     crash_window_chart,
     exposure_chart,
     normalize_trade_log,
-    pnl_attribution_chart,
+    options_pnl_decomposition_chart,
     premium_spend_chart,
     trade_pnl_chart,
+    trade_return_histogram,
 )
 from options_portfolio_backtester.analytics.trade_log import TradeLog, Trade
 from options_portfolio_backtester.core.types import Order
@@ -81,17 +82,34 @@ def test_normalize_rejects_unknown_type():
 # chart builders return non-empty specs on valid input
 # ---------------------------------------------------------------------------
 
-def test_pnl_attribution_chart_has_legs():
-    chart = pnl_attribution_chart(_balance())
-    legs = set(chart.data["leg"])
-    assert {"stocks capital", "options capital", "cash"} <= legs
+def test_options_pnl_decomposition_known_trade():
+    """BTO 10×$1.50 then STC at $0.50 on $100k initial capital:
+    paid 1.5%, received 0.5%, net −1.0%."""
+    tl = TradeLog()
+    tl.add_trade(_trade(entry="2020-02-03", exit_="2020-04-01",
+                        entry_price=1.5, exit_price=0.5, qty=10))
+    chart = options_pnl_decomposition_chart(tl.to_dataframe(), _flat_balance())
+    data = chart.data.set_index(["date", "series"])["value"]
+    exit_day = pd.Timestamp("2020-04-01")
+    assert abs(data.loc[(exit_day, "Premium paid (drag)")] - (-0.015)) < 1e-9
+    assert abs(data.loc[(exit_day, "Payoffs received")] - 0.005) < 1e-9
+    assert abs(data.loc[(exit_day, "Net options P&L")] - (-0.010)) < 1e-9
 
 
-def test_pnl_attribution_chart_missing_columns():
-    bal = pd.DataFrame({"total capital": [1.0, 2.0]},
-                       index=pd.date_range("2020-01-01", periods=2))
-    chart = pnl_attribution_chart(bal)
+def test_options_pnl_decomposition_empty_inputs():
+    chart = options_pnl_decomposition_chart(pd.DataFrame(), _balance())
     assert len(chart.data) == 0
+
+
+def test_trade_return_histogram_mass_at_loss():
+    """A −67% trade and a +24x trade land in the right bins."""
+    chart = trade_return_histogram(_trade_log().to_dataframe())
+    data = chart.data
+    assert data["count"].sum() == 2
+    lows = data[data["bin_start"] < 0]
+    highs = data[data["bin_start"] > 10]
+    assert lows["count"].sum() == 1
+    assert highs["count"].sum() == 1
 
 
 def test_premium_spend_chart_with_budget_layers_rule():

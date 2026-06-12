@@ -44,7 +44,7 @@ def returns_chart(report: pd.DataFrame) -> alt.VConcatChart:
     return alt.vconcat(layered, lower, data=report.reset_index())
 
 
-def returns_histogram(report: pd.DataFrame) -> alt.Chart:
+def returns_histogram(report: pd.DataFrame) -> alt.LayerChart:
     # Pre-bin in numpy instead of letting vega-lite bin client-side: keeps
     # exact counts while staying under altair's 5000-row spec limit on
     # multi-decade daily backtests.
@@ -55,36 +55,65 @@ def returns_histogram(report: pd.DataFrame) -> alt.Chart:
         'bin_end': edges[1:],
         'count': counts,
     })
-    return alt.Chart(data).mark_bar().encode(
+    bars = alt.Chart(data).mark_bar(color='steelblue', opacity=0.8).encode(
         x=alt.X('bin_start:Q', bin='binned', axis=alt.Axis(format='%'),
                 title='% change'),
         x2='bin_end:Q',
-        y=alt.Y('count:Q'),
+        # Symlog counts: on a linear axis the peak at zero crushes the tail
+        # observations — the fat tails are the whole point of looking at
+        # this distribution.
+        y=alt.Y('count:Q', title='Days (symlog)',
+                scale=alt.Scale(type='symlog')),
     )
+    layers = [bars]
+    if len(rets) > 1 and rets.std() > 0:
+        # Fitted-normal overlay: expected bin counts under a Gaussian with
+        # the sample mean/std. The gap between the dashed line and the bars
+        # in the tails is the leptokurtosis, made visible.
+        centers = (edges[:-1] + edges[1:]) / 2
+        width = edges[1] - edges[0]
+        mu, sigma = rets.mean(), rets.std()
+        expected = (len(rets) * width / (sigma * np.sqrt(2 * np.pi))
+                    * np.exp(-0.5 * ((centers - mu) / sigma) ** 2))
+        normal = alt.Chart(pd.DataFrame({'x': centers, 'expected': expected})) \
+            .mark_line(color='black', strokeDash=[6, 4]).encode(
+                x='x:Q', y='expected:Q')
+        layers.append(normal)
+    return alt.layer(*layers).properties(
+        title='Daily return distribution vs fitted normal')
 
 
 def monthly_returns_heatmap(report: pd.DataFrame) -> alt.LayerChart:
     resample = report.resample('ME')['total capital'].last()
     monthly_returns = resample.pct_change().reset_index()
     monthly_returns.loc[monthly_returns.index[0], 'total capital'] = resample.iloc[0] / report.iloc[0]['total capital'] - 1
-    monthly_returns.columns = ['date', 'return']
+    monthly_returns.columns = ['date', 'ret']
+    monthly_returns['label'] = monthly_returns['ret'] * 100
 
-    # pyfolio convention: RdYlGn diverging colormap centered at zero,
-    # annotated cell values.
+    # pyfolio convention: RdYlGn diverging colormap centered at zero, cell
+    # values annotated as percent×100 with no unit (compact enough to fit).
+    # The color domain is clamped to ±10%: a single crash-payoff month
+    # (e.g. +73% in Nov 2008) would otherwise stretch the scale until every
+    # normal month rendered as the same pale yellow. Outliers saturate; the
+    # tooltip keeps the exact value.
     base = alt.Chart(monthly_returns).encode(
         alt.X('year(date):O', title='Year'),
         alt.Y('month(date):O', title='Month'),
     )
     rects = base.mark_rect().encode(
-        alt.Color('mean(return):Q', title='Return',
-                  scale=alt.Scale(scheme='redyellowgreen', domainMid=0),
+        alt.Color('ret:Q', title='Return',
+                  scale=alt.Scale(scheme='redyellowgreen', domainMid=0,
+                                  domain=[-0.10, 0.10], clamp=True),
                   legend=alt.Legend(format='.0%')),
-        alt.Tooltip('mean(return):Q', format='.2%'),
+        alt.Tooltip('ret:Q', format='.2%'),
     )
-    labels = base.mark_text(fontSize=9, color='#333').encode(
-        alt.Text('mean(return):Q', format='.1%'),
+    labels = base.mark_text(fontSize=8).encode(
+        alt.Text('label:Q', format='.1f'),
+        color=alt.condition('abs(datum.ret) > 0.065',
+                            alt.value('white'), alt.value('#333')),
     )
-    return (rects + labels).properties(title='Monthly returns (%)')
+    return (rects + labels).properties(
+        width=700, height=320, title='Monthly returns (%)')
 
 
 def annual_returns_chart(balance: pd.DataFrame) -> alt.LayerChart:
@@ -177,8 +206,14 @@ def thin_for_chart(data, max_rows: int = _MAX_CHART_ROWS):
 
 def equity_curve_chart(balance: pd.DataFrame,
                        benchmark_balance: pd.DataFrame | None = None,
-                       log_scale: bool = False) -> alt.Chart:
-    """Indexed equity curve (start = 1.0), optionally overlaid with a benchmark."""
+                       log_scale: bool = False,
+                       drawdown_periods: pd.DataFrame | None = None) -> alt.Chart:
+    """Indexed equity curve (start = 1.0), optionally overlaid with a benchmark.
+
+    ``drawdown_periods`` (the frame from ``tearsheet.top_drawdowns``) shades
+    the worst drawdown episodes as translucent bands, pyfolio's
+    drawdown-periods view folded into the main chart.
+    """
     def _indexed(bal: pd.DataFrame, label: str) -> pd.DataFrame:
         total = thin_for_chart(bal["total capital"].dropna())
         return pd.DataFrame({
@@ -208,7 +243,18 @@ def equity_curve_chart(balance: pd.DataFrame,
     )
     ref = alt.Chart(pd.DataFrame({"y": [1.0]})).mark_rule(
         color="black", strokeDash=[6, 4]).encode(y="y:Q")
-    return (lines + ref).properties(width=700, height=300, title="Equity curve")
+    layer_list = [lines, ref]
+    if drawdown_periods is not None and not drawdown_periods.empty:
+        bands = drawdown_periods[["peak", "recovery", "depth"]].copy()
+        bands["recovery"] = bands["recovery"].fillna(data["date"].max())
+        shade = alt.Chart(bands).mark_rect(color="coral", opacity=0.15).encode(
+            x="peak:T", x2="recovery:T",
+            tooltip=[alt.Tooltip("peak:T"), alt.Tooltip("recovery:T"),
+                     alt.Tooltip("depth:Q", title="Depth (%)")],
+        )
+        layer_list.insert(0, shade)
+    return alt.layer(*layer_list).properties(
+        width=700, height=300, title="Equity curve")
 
 
 def underwater_chart(drawdown: pd.Series) -> alt.Chart:
@@ -221,7 +267,7 @@ def underwater_chart(drawdown: pd.Series) -> alt.Chart:
     ).properties(width=700, height=180, title="Underwater plot")
 
 
-def rolling_sharpe_chart(balance: pd.DataFrame, window: int = 126) -> alt.Chart:
+def rolling_sharpe_chart(balance: pd.DataFrame, window: int = 252) -> alt.Chart:
     """Rolling annualized Sharpe (0% risk-free) of daily total-capital returns."""
     rets = balance["total capital"].pct_change().dropna()
     mean = rets.rolling(window).mean()

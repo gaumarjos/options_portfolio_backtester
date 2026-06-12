@@ -39,6 +39,20 @@ anchored on the commit hash that introduced the change.
   ``research/spitznagel_spy/make_figures.py`` regenerates the article's
   figures from the pinned engine configuration. See
   ``docs/REPORTING_ROADMAP.md``.
+- **Tearsheet panel redesign after review.** ``pnl_attribution_chart``
+  (balance-column deltas) is replaced by
+  ``options_pnl_decomposition_chart`` built from actual trades — the old
+  panel conflated rebalancing flows with P&L (day-one cash investment
+  rendered as a −100% "loss"). The allocation stack is dropped from the
+  default report (information-free for ~100% equity strategies;
+  ``weights_area_chart`` remains available). Equity curve defaults to log
+  scale with the top-5 drawdown episodes shaded; the return histogram gets
+  symlog counts plus a fitted-normal overlay; new
+  ``trade_return_histogram`` (per-trade return on premium); rolling Sharpe
+  window widened to 252d; heatmap cells annotated compactly with the color
+  domain clamped to ±10% so crash-payoff outliers don't wash out the
+  scale. ``tests/oracles/test_article_figures.py`` pins the article's
+  figure inputs in CI alongside the published numbers.
 - **Fix ``TradeLog.from_legacy_trade_log`` on Rust engine output.** The
   Rust engine emits the ``order`` column as plain strings (``"BTO"``)
   while the converter compared against the ``Order`` enum, so it

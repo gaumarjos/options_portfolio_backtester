@@ -87,7 +87,11 @@ class TearsheetReport:
         if self.balance is None or self.balance.empty:
             return {}
         out: dict[str, Any] = {}
-        out["Equity curve"] = c.equity_curve_chart(self.balance, self.benchmark_balance)
+        # Log scale: over a long sample, linear growth-of-$1 visually
+        # exaggerates the recent years and compresses the early crashes.
+        out["Equity curve"] = c.equity_curve_chart(
+            self.balance, self.benchmark_balance, log_scale=True,
+            drawdown_periods=top_drawdowns(self.balance))
         if not self.drawdown_series.empty:
             out["Underwater plot"] = c.underwater_chart(self.drawdown_series)
         out["Rolling Sharpe"] = c.rolling_sharpe_chart(self.balance)
@@ -98,16 +102,16 @@ class TearsheetReport:
         if "total capital" in self.balance.columns:
             out["Annual returns"] = c.annual_returns_chart(self.balance)
             out["Monthly returns heatmap"] = c.monthly_returns_heatmap(self.balance)
-        if "stocks capital" in self.balance.columns:
-            out["Capital allocation"] = c.weights_area_chart(self.balance)
-            out["P&L attribution"] = oc.pnl_attribution_chart(self.balance)
         if "options capital" in self.balance.columns:
             out["Options exposure"] = oc.exposure_chart(self.balance)
         crash = oc.crash_window_chart(self.balance, self.benchmark_balance)
         if crash is not None:
             out["Crash windows"] = crash
         if not self.trade_df.empty:
+            out["Options P&L decomposition"] = oc.options_pnl_decomposition_chart(
+                self.trade_df, self.balance)
             out["Per-trade P&L"] = oc.trade_pnl_chart(self.trade_df)
+            out["Trade payoff distribution"] = oc.trade_return_histogram(self.trade_df)
             out["Premium spend"] = oc.premium_spend_chart(
                 self.trade_df, self.balance, self.budget_annual_pct)
         return out

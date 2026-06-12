@@ -14,6 +14,7 @@ legacy MultiIndex trade log returned by ``BacktestEngine.run()``.
 from __future__ import annotations
 
 import altair as alt
+import numpy as np
 import pandas as pd
 
 from options_portfolio_backtester.analytics.charts import thin_for_chart
@@ -50,37 +51,87 @@ def normalize_trade_log(trade_log) -> pd.DataFrame:
     raise TypeError(f"Unsupported trade log type: {type(trade_log)!r}")
 
 
-def pnl_attribution_chart(balance: pd.DataFrame) -> alt.Chart:
-    """Equity leg vs options leg P&L contribution over time.
+def _signed_cumulative(trade_df: pd.DataFrame, date_col: str, price_col: str,
+                       order_col: str, debit_orders: tuple[str, ...]) -> pd.Series:
+    """Cumulative signed cash flow of one trade side, indexed by date."""
+    multiplier = (trade_df["shares_per_contract"]
+                  if "shares_per_contract" in trade_df.columns
+                  else SHARES_PER_CONTRACT)
+    if order_col in trade_df.columns:
+        sign = trade_df[order_col].map(
+            lambda o: 1.0 if str(o).replace("Order.", "") in debit_orders else -1.0)
+    else:
+        sign = 1.0
+    flows = (trade_df[price_col].abs() * trade_df["quantity"].abs()
+             * multiplier * sign)
+    series = pd.Series(flows.values,
+                       index=pd.to_datetime(trade_df[date_col]).dt.normalize())
+    return series.groupby(level=0).sum().sort_index().cumsum()
 
-    Cumulative change of each capital component relative to day one, so the
-    premium-bleed-then-crash-payoff sawtooth of the options leg is visible
-    instead of buried in the blended total.
+
+def options_pnl_decomposition_chart(trade_df: pd.DataFrame,
+                                    balance: pd.DataFrame) -> alt.Chart:
+    """The bleed-vs-payoff picture, built from actual trades.
+
+    Three lines as a share of initial capital: cumulative premium paid
+    (plotted negative — the drag), cumulative payoffs received, and their
+    net. This is real P&L attribution for the options leg; balance-column
+    deltas can't provide it because they conflate rebalancing flows with
+    P&L (day-one cash invested into stocks shows up as a −100% "loss").
     """
-    cols = [c for c in ("stocks capital", "options capital", "cash") if c in balance.columns]
-    if not cols:
-        return alt.Chart(pd.DataFrame({"date": [], "pnl": [], "leg": []})).mark_line()
-    initial_total = balance["total capital"].dropna().iloc[0]
-    # melt multiplies rows by len(cols); thin the wide frame accordingly
-    deltas = thin_for_chart(balance[cols].sub(balance[cols].iloc[0]).div(initial_total),
-                            max_rows=2000 // len(cols))
-    data = deltas.rename_axis("date").reset_index().melt(
-        id_vars="date", var_name="leg", value_name="pnl")
-    # Symlog y-scale: over a long sample the equity leg compounds to many
-    # hundreds of percent while the options leg oscillates within a few
-    # percent of zero — on a linear axis the bleed/payoff sawtooth (the
-    # whole point of this panel) flattens into an invisible line.
+    if trade_df.empty or balance.empty:
+        return alt.Chart(pd.DataFrame({"date": [], "value": [], "series": []})).mark_line()
+    initial = balance["total capital"].dropna().iloc[0]
+    paid = _signed_cumulative(trade_df, "entry_date", "entry_price",
+                              "entry_order", debit_orders=("BTO",))
+    received = _signed_cumulative(trade_df, "exit_date", "exit_price",
+                                  "exit_order", debit_orders=("BTC",)) * -1.0
+    idx = paid.index.union(received.index)
+    paid = paid.reindex(idx).ffill().fillna(0.0)
+    received = received.reindex(idx).ffill().fillna(0.0)
+    frame = pd.DataFrame({
+        "Premium paid (drag)": -paid / initial,
+        "Payoffs received": received / initial,
+        "Net options P&L": (received - paid) / initial,
+    }, index=idx)
+    data = thin_for_chart(frame, max_rows=2000 // 3).rename_axis("date") \
+        .reset_index().melt(id_vars="date", var_name="series", value_name="value")
     return alt.Chart(data).mark_line(strokeWidth=2).encode(
         x=alt.X("date:T", title="Date"),
-        y=alt.Y("pnl:Q", title="Cumulative P&L (share of initial capital, symlog)",
-                scale=alt.Scale(type="symlog", constant=0.02),
+        y=alt.Y("value:Q", title="Cumulative (share of initial capital)",
                 axis=alt.Axis(format="%")),
-        color=alt.Color("leg:N", title=None,
+        color=alt.Color("series:N", title=None,
                         scale=alt.Scale(
-                            domain=["stocks capital", "options capital", "cash"],
-                            range=["forestgreen", "orangered", "gray"])),
-        tooltip=["date:T", "leg:N", alt.Tooltip("pnl:Q", format=".2%")],
-    ).properties(width=700, height=250, title="P&L attribution by leg")
+                            domain=["Premium paid (drag)", "Payoffs received",
+                                    "Net options P&L"],
+                            range=["coral", "forestgreen", "steelblue"])),
+        tooltip=["date:T", "series:N", alt.Tooltip("value:Q", format=".2%")],
+    ).properties(width=700, height=250,
+                 title="Options leg: premium bleed vs crash payoffs")
+
+
+def trade_return_histogram(trade_df: pd.DataFrame) -> alt.Chart:
+    """Distribution of per-trade return on premium (×), symlog counts.
+
+    For deep-OTM puts this is the signature shape: a mass at −1× (total
+    premium loss) and a thin tail of rare large multiples.
+    """
+    if trade_df.empty or "return_pct" not in trade_df.columns:
+        return alt.Chart(pd.DataFrame({"bin_start": [], "count": []})).mark_bar()
+    rets = trade_df["return_pct"].dropna()
+    counts, edges = np.histogram(rets, bins=40)
+    data = pd.DataFrame({"bin_start": edges[:-1], "bin_end": edges[1:],
+                         "count": counts})
+    return alt.Chart(data).mark_bar(color="steelblue", opacity=0.8).encode(
+        x=alt.X("bin_start:Q", bin="binned", title="Return on premium (×)",
+                axis=alt.Axis(format=".1f")),
+        x2="bin_end:Q",
+        y=alt.Y("count:Q", title="Trades (symlog)",
+                scale=alt.Scale(type="symlog")),
+        tooltip=[alt.Tooltip("bin_start:Q", format=".2f"),
+                 alt.Tooltip("count:Q")],
+    ).properties(width=700, height=200,
+                 title="Per-trade return on premium (distribution)")
 
 
 def premium_spend_chart(trade_df: pd.DataFrame,
@@ -167,7 +218,8 @@ def crash_window_chart(balance: pd.DataFrame,
         data = pd.concat(frames, ignore_index=True)
         panels.append(
             alt.Chart(data).mark_line().encode(
-                x=alt.X("date:T", title=None),
+                x=alt.X("date:T", title=None,
+                        axis=alt.Axis(format="%b %Y", tickCount=8)),
                 y=alt.Y("value:Q", title="Indexed (window start = 100)",
                         scale=alt.Scale(zero=False)),
                 color=alt.Color("series:N", title=None),
@@ -189,10 +241,19 @@ def trade_pnl_chart(trade_df: pd.DataFrame) -> alt.Chart:
         return alt.Chart(pd.DataFrame({"exit_date": [], "net_pnl": []})).mark_bar()
     data = trade_df[["exit_date", "net_pnl", "contract"]].copy()
     data["outcome"] = (data["net_pnl"] > 0).map({True: "win", False: "loss"})
+    # Explicit decade ticks: vega's automatic symlog ticks bunch up near the
+    # top of the scale and render illegibly.
+    peak = data["net_pnl"].abs().max()
+    ticks = [0.0]
+    power = 1_000.0
+    while power <= peak:
+        ticks = [-power] + ticks + [power]
+        power *= 10
     return alt.Chart(data).mark_bar().encode(
         x=alt.X("exit_date:T", title="Exit date"),
         y=alt.Y("net_pnl:Q", title="Net P&L per trade ($, symlog)",
-                scale=alt.Scale(type="symlog")),
+                scale=alt.Scale(type="symlog"),
+                axis=alt.Axis(values=ticks, format="~s")),
         color=alt.Color("outcome:N", title=None,
                         scale=alt.Scale(domain=["win", "loss"],
                                         range=["forestgreen", "coral"])),
@@ -216,7 +277,8 @@ def exposure_chart(balance: pd.DataFrame) -> alt.Chart:
 __all__ = [
     "DEFAULT_CRASH_WINDOWS",
     "normalize_trade_log",
-    "pnl_attribution_chart",
+    "options_pnl_decomposition_chart",
+    "trade_return_histogram",
     "premium_spend_chart",
     "crash_window_chart",
     "trade_pnl_chart",

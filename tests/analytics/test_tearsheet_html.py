@@ -98,17 +98,30 @@ def test_charts_assembles_options_panels():
     report = build_tearsheet(_balance())
     panels = report.charts()
     for expected in ("Equity curve", "Underwater plot", "Rolling Sharpe",
-                     "Capital allocation", "P&L attribution", "Options exposure",
-                     "Crash windows"):
+                     "Annual returns", "Options exposure", "Crash windows"):
         assert expected in panels, expected
+    # balance-delta attribution and the allocation stack were dropped from
+    # the default report: the former conflated flows with P&L, the latter
+    # is information-free for a ~100% equity strategy
+    assert "P&L attribution" not in panels
+    assert "Capital allocation" not in panels
 
 
 def test_charts_skips_unavailable_panels():
     bal = _balance()[["total capital", "% change"]]
     panels = build_tearsheet(bal).charts()
-    assert "P&L attribution" not in panels
+    assert "Options P&L decomposition" not in panels
     assert "Per-trade P&L" not in panels
     assert "Equity curve" in panels
+
+
+def test_equity_curve_uses_log_scale():
+    report = build_tearsheet(_balance())
+    spec = report.charts()["Equity curve"].to_dict()
+    line_layer = next(l for l in spec["layer"]
+                      if "color" in l.get("encoding", {})
+                      and "scale" in l["encoding"]["color"])
+    assert line_layer["encoding"]["y"]["scale"]["type"] == "log"
 
 
 def test_charts_empty_without_balance():
@@ -149,11 +162,16 @@ def test_benchmark_appears_in_equity_curve():
     bench["total capital"] *= 0.95
     report = build_tearsheet(bal, benchmark_balance=bench)
     chart = report.charts()["Equity curve"]
-    lines = chart.layer[0]  # layer 0 = series lines, layer 1 = 1.0 reference rule
-    assert set(lines.data["series"]) == {"strategy", "benchmark"}
     spec = chart.to_dict()
-    color_scale = spec["layer"][0]["encoding"]["color"]["scale"]
-    assert color_scale["range"] == ["forestgreen", "gray"]  # pyfolio palette
+    # find the line layer regardless of drawdown-shading/reference layers
+    line_layer = next(l for l in spec["layer"]
+                      if "color" in l.get("encoding", {})
+                      and "scale" in l["encoding"]["color"])
+    assert line_layer["encoding"]["color"]["scale"]["range"] == ["forestgreen", "gray"]
+    series = {d["series"] for layer in chart.layer
+              if layer.data is not None and "series" in getattr(layer.data, "columns", [])
+              for d in layer.data[["series"]].drop_duplicates().to_dict("records")}
+    assert series == {"strategy", "benchmark"}
 
 
 def test_trade_log_supplies_pnls_and_panels():
@@ -171,6 +189,8 @@ def test_trade_log_supplies_pnls_and_panels():
     panels = report.charts()
     assert "Per-trade P&L" in panels
     assert "Premium spend" in panels
+    assert "Options P&L decomposition" in panels
+    assert "Trade payoff distribution" in panels
 
 
 # ---------------------------------------------------------------------------
