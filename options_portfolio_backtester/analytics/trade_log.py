@@ -68,9 +68,13 @@ class TradeLog:
         first_leg: str = trade_log.columns.levels[0][0]
 
         # The Rust engine emits orders as plain strings ("BTO"); the old
-        # Python engine used the Order enum. Accept both.
-        opening = {Order.BTO, Order.STO, Order.BTO.value, Order.STO.value}
-        entry_mask = trade_log[first_leg]["order"].isin(opening)
+        # Python engine used the Order enum. Normalize both to their string
+        # value, then compare against a string-only set. (Passing an Order
+        # enum *object* inside the isin() set makes newer pandas/pyarrow fail
+        # Arrow type inference — "Could not convert <Order.STO> ..." — so the
+        # set must contain only plain strings.)
+        orders = trade_log[first_leg]["order"].map(lambda o: getattr(o, "value", o))
+        entry_mask = orders.isin({Order.BTO.value, Order.STO.value})
         entries = trade_log.loc[entry_mask]
         exits = trade_log.loc[~entry_mask]
 
