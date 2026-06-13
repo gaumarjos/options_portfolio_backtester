@@ -17,6 +17,7 @@ findings/                 written-up conclusions (read these first)
   CROSS_UNDERLYING.md
   SIGNAL_EXPERIMENTS.md
   DATA_COVERAGE.md        deep-OTM puts absent from pre-2003 SPX chain
+  REGIME_RESULTS_25OTM.md per-regime hedged-vs-unhedged at a fillable depth
 figures/                  generated chart output (gitignored)
 ```
 
