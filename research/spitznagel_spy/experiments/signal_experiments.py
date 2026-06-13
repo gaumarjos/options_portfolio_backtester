@@ -38,7 +38,7 @@ from options_portfolio_backtester.data.providers import (
     HistoricalOptionsData, TiingoData,
 )
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists())
 DATA = ROOT / "data" / "processed"
 OPTS, STK, SIG = DATA / "spx_full_options.parquet", DATA / "spx_full_stocks.csv", DATA / "signals.csv"
 OTM_LO, OTM_HI, DTE_LO, DTE_HI, EXIT_DTE, BUDGET = 0.25, 0.30, 90, 180, 30, 0.033

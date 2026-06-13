@@ -39,7 +39,7 @@ from options_portfolio_backtester.data.providers import (
     TiingoData,
 )
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists())
 DATA = REPO_ROOT / "data" / "processed"
 
 UNDERLYINGS = {
