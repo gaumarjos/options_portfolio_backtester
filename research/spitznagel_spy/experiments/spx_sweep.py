@@ -96,9 +96,12 @@ def _run(opts_data, stocks_data, otm_lo, otm_hi, dte_lo, dte_hi, exit_dte, budge
     st = Strategy(sch); st.add_leg(leg)
     st.add_exit_thresholds(profit_pct=math.inf, loss_pct=math.inf)
     bt.options_strategy = st
-    bt.run(rebalance_freq=2, rebalance_unit="BMS")
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # fill-rate reported explicitly below
+        bt.run(rebalance_freq=2, rebalance_unit="BMS")
     b = bt.balance["total capital"]
-    return _ann(b), _maxdd(b), _sharpe(b), len(bt.trade_log)
+    return _ann(b), _maxdd(b), _sharpe(b), len(bt.trade_log), bt.option_fill_rate
 
 
 def main():
@@ -126,24 +129,29 @@ def main():
     bh_ann = _ann(bh)
     print(f"=== SPX {regime} {lo.date()}..{hi.date()}  ({len(opt):,} rows, {len(stk):,} days) ===")
     print(f"buy & hold: CAGR {bh_ann:+.2f}%  maxDD {_maxdd(bh):.1f}%  Sharpe {_sharpe(bh):.3f}\n")
-    print(f"  {'OTM':9s} {'DTE/exit':12s} {'bud':>5s} {'CAGR%':>8s} {'Excess':>8s} {'MaxDD%':>8s} {'Sharpe':>7s} {'trd':>5s}")
+    print(f"  {'OTM':9s} {'DTE/exit':12s} {'bud':>5s} {'CAGR%':>8s} {'Excess':>8s} {'MaxDD%':>8s} {'Sharpe':>7s} {'trd':>5s} {'fill':>5s}")
 
     results = []
     for (olo, ohi) in OTM_BANDS:
         for (dlabel, dlo, dhi, edte) in DTE_CONFIGS:
             for bud in BUDGETS:
-                a, dd, sh, n = _run(o, s, olo, ohi, dlo, dhi, edte, bud)
+                a, dd, sh, n, fill = _run(o, s, olo, ohi, dlo, dhi, edte, bud)
                 ex = a - bh_ann
-                results.append((ex, a, dd, sh, n, f"{int(olo*100)}-{int(ohi*100)}%", dlabel, bud))
+                flag = " LOW-FILL" if fill < 0.9 else ""
+                results.append((ex, a, dd, sh, n, f"{int(olo*100)}-{int(ohi*100)}%", dlabel, bud, fill))
                 print(f"  {int(olo*100)}-{int(ohi*100)}%   {dlabel:12s} {bud*100:>4.1f} "
-                      f"{a:>8.2f} {ex:>+8.2f} {dd:>8.1f} {sh:>7.3f} {n:>5d}", flush=True)
+                      f"{a:>8.2f} {ex:>+8.2f} {dd:>8.1f} {sh:>7.3f} {n:>5d} {fill:>4.0%}{flag}", flush=True)
 
-    print(f"\n=== TOP 10 by excess CAGR (regime={regime}) ===")
-    for ex, a, dd, sh, n, otm, dlabel, bud in sorted(results, reverse=True)[:10]:
-        print(f"  {otm:8s} {dlabel:12s} {bud*100:>4.1f}%  excess {ex:+.2f}pp  CAGR {a:+.2f}%  DD {dd:.1f}%  Sharpe {sh:.3f}")
-    print(f"\n=== TOP 10 by Sharpe ===")
-    for ex, a, dd, sh, n, otm, dlabel, bud in sorted(results, key=lambda r: r[3], reverse=True)[:10]:
-        print(f"  {otm:8s} {dlabel:12s} {bud*100:>4.1f}%  Sharpe {sh:.3f}  excess {ex:+.2f}pp  DD {dd:.1f}%")
+    # Only configs that actually filled (>=90%) are a trustworthy hedged result;
+    # the rest are partial buy-and-hold because the requested band is too deep
+    # for the chain in this window (see findings/DATA_COVERAGE.md).
+    trustworthy = [r for r in results if r[8] >= 0.9]
+    print(f"\n=== TOP 10 by excess CAGR (regime={regime}, fill>=90% only) ===")
+    for ex, a, dd, sh, n, otm, dlabel, bud, fill in sorted(trustworthy, reverse=True)[:10]:
+        print(f"  {otm:8s} {dlabel:12s} {bud*100:>4.1f}%  excess {ex:+.2f}pp  CAGR {a:+.2f}%  DD {dd:.1f}%  Sharpe {sh:.3f}  fill {fill:.0%}")
+    print(f"\n=== TOP 10 by Sharpe (fill>=90% only) ===")
+    for ex, a, dd, sh, n, otm, dlabel, bud, fill in sorted(trustworthy, key=lambda r: r[3], reverse=True)[:10]:
+        print(f"  {otm:8s} {dlabel:12s} {bud*100:>4.1f}%  Sharpe {sh:.3f}  excess {ex:+.2f}pp  DD {dd:.1f}%  fill {fill:.0%}")
 
 
 if __name__ == "__main__":
