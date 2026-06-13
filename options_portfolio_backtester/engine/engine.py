@@ -319,7 +319,8 @@ class BacktestEngine:
     def run(self, rebalance_freq: int = 0, monthly: bool = False,
             sma_days: int | None = None,
             rebalance_unit: str = 'BMS',
-            check_exits_daily: bool | None = None) -> pd.DataFrame:
+            check_exits_daily: bool | None = None,
+            rebalance_dates=None) -> pd.DataFrame:
         """Run the backtest. Returns the trade log DataFrame.
 
         Args:
@@ -374,6 +375,7 @@ class BacktestEngine:
             sma_days=sma_days,
             rebalance_unit=rebalance_unit,
             check_exits_daily=check_exits_daily,
+            rebalance_dates_override=rebalance_dates,
         )
 
     def get_results(self, data_hash: str | None = None):
@@ -493,6 +495,7 @@ class BacktestEngine:
         sma_days: int | None,
         rebalance_unit: str = 'BMS',
         check_exits_daily: bool = False,
+        rebalance_dates_override=None,
     ) -> pd.DataFrame:
         """Run the backtest using the Rust full-loop implementation."""
         import math
@@ -507,7 +510,18 @@ class BacktestEngine:
             .drop_duplicates("quotedate")
             .set_index("quotedate")
         )
-        if rebalance_freq:
+        if rebalance_dates_override is not None:
+            # Signal-gated entry: caller supplies the exact dates on which to
+            # rebalance/enter (e.g. only when a regime signal is on). Snapped
+            # to the trading calendar so they align with option quote dates.
+            valid = pd.DatetimeIndex(sorted(dates_df.index))
+            rb_date_ns = []
+            for d in pd.to_datetime(list(rebalance_dates_override)):
+                pos = valid.searchsorted(d)
+                if pos < len(valid):
+                    rb_date_ns.append(int(valid[pos].value))
+            rb_date_ns = sorted(set(rb_date_ns))
+        elif rebalance_freq:
             rebalancing_days = pd.to_datetime(
                 dates_df.groupby(pd.Grouper(freq=f"{rebalance_freq}{rebalance_unit}"))
                 .apply(lambda x: x.index.min())

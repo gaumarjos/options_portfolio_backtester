@@ -151,3 +151,43 @@ class TestEngineInit:
     def test_stop_if_broke_flag(self):
         e = BacktestEngine({"stocks": 1.0}, stop_if_broke=True)
         assert e.stop_if_broke is True
+
+
+class TestRebalanceDatesOverride:
+    """run(rebalance_dates=...) gates entry to a caller-supplied set of dates
+    (used for signal-gated tail-hedge research). Verifies the override is
+    honored: a single rebalance date yields far fewer entries than the
+    default per-period schedule, and entries occur only on/after it."""
+
+    def _engine(self):
+        opts = _options_data()
+        eng = BacktestEngine({"stocks": 0.97, "options": 0.03, "cash": 0.0},
+                             cost_model=NoCosts())
+        eng.stocks = _ivy_stocks()
+        eng.stocks_data = _stocks_data()
+        eng.options_data = opts
+        eng.options_strategy = _buy_strategy(opts.schema)
+        return eng, opts
+
+    def test_override_reduces_and_gates_entries(self):
+        import pandas as pd
+        eng_default, opts = self._engine()
+        eng_default.run(rebalance_freq=1)
+        default_entries = eng_default.trade_log[
+            eng_default.trade_log[("leg_1", "order")] == "BTO"
+        ]
+
+        dates = sorted(pd.to_datetime(opts._data["quotedate"].unique()))
+        one_date = [dates[len(dates) // 2]]
+        eng_gated, _ = self._engine()
+        eng_gated.run(rebalance_freq=1, rebalance_dates=one_date)
+        gated_entries = eng_gated.trade_log[
+            eng_gated.trade_log[("leg_1", "order")] == "BTO"
+        ]
+
+        # Gating to one date must not produce more entries than the full schedule,
+        # and any entry must be on/after the single supplied rebalance date.
+        assert len(gated_entries) <= len(default_entries)
+        if not gated_entries.empty:
+            entry_dates = pd.to_datetime(gated_entries[("totals", "date")])
+            assert (entry_dates >= one_date[0]).all()

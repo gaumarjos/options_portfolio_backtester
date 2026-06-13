@@ -83,11 +83,19 @@ def main():
             print(f'Computed buffett_indicator (nfc_equity_mv / GDP)')
 
     if 'nfc_equity_mv' in daily.columns and 'nfc_net_worth' in daily.columns:
-        # Tobin's Q proxy: market value / net worth
-        # nfc_net_worth is in weird units (ratio), use nfc_equity_mv levels
-        # Actually NCBCMDPMVCE is "market value / cost" already
-        daily['tobin_q'] = daily['nfc_net_worth']
-        print(f'Computed tobin_q (NCBCMDPMVCE is already MV/replacement cost)')
+        # Tobin's Q ≈ market value of equity / net worth at replacement cost.
+        # WARNING: the configured net-worth series (NCBCMDPMVCE) does not carry
+        # net-worth *levels* — it trends DOWN (31.75 -> 19.60, 2007-2024) where
+        # a real net-worth level rises, so this ratio is dominated by the equity
+        # numerator and is NOT a trustworthy Tobin's Q. Previously this column
+        # just *copied* nfc_net_worth (a strictly-falling series), which made a
+        # naive "Tobin high" signal coincide with 2007-2009 and produced a
+        # spurious +12pp backtest result (see research/spitznagel_spy). Compute
+        # the ratio so at least the formula is right, but treat it as a rough
+        # valuation proxy only; for real work substitute Shiller CAPE or a
+        # correct FRED replacement-cost net-worth series.
+        daily['tobin_q'] = daily['nfc_equity_mv'] / daily['nfc_net_worth']
+        print('Computed tobin_q = equity_mv / net_worth (PROXY — see warning in source)')
 
     daily = daily.dropna(how='all')
 
