@@ -46,12 +46,18 @@ FULL = ("1996-01-01", "2025-12-31")
 GFC = (pd.Timestamp("2007-10-01"), pd.Timestamp("2009-06-30"))
 COVID = (pd.Timestamp("2020-01-01"), pd.Timestamp("2020-12-31"))
 
-# --- the grid (all entry DTE <= 90; fillable OTM range) ---
-OTM_BANDS = [(0.05, 0.10), (0.10, 0.15), (0.15, 0.20), (0.20, 0.25), (0.25, 0.30)]
-ENTRY_DTE = [("30-60", 30, 60), ("60-90", 60, 90)]
-EXIT_DTE = [60, 30, 15]          # days-to-expiry at sale (the timing lever)
+# --- the grid ---
+# DTE spans both the operational <=90 range AND the longer 90-180 range, because
+# the only positive full-history excess lives at 90-180 (the duration lever — a
+# 2x2 showed 90-180 bi-monthly = +0.95pp vs 60-90 = -0.91pp). Including both makes
+# the cost of the <=90 constraint explicit rather than hidden.
+OTM_BANDS = [(0.10, 0.15), (0.15, 0.20), (0.20, 0.25), (0.25, 0.30)]
+ENTRY_DTE = [("30-60", 30, 60), ("60-90", 60, 90), ("90-180", 90, 180), ("120-180", 120, 180)]
+EXIT_DTE = [30, 14]              # days-to-expiry at sale (longer hold = lower number)
 BUDGETS = [0.01, 0.033]
-REBALANCE_FREQ = 1               # monthly: tighter coverage than bi-monthly
+REBALANCE_FREQ = 2               # bi-monthly: less premium churn than monthly
+                                 # (monthly rolling roughly halved the excess —
+                                 #  more entries = more bid/ask + decay paid)
 FILL_FLOOR = 0.90
 
 
@@ -148,7 +154,7 @@ def main():
     bh_gfc_dd = _maxdd(bh.loc[(bh.index >= GFC[0]) & (bh.index <= GFC[1])])
     bh_covid_dd = _maxdd(bh.loc[(bh.index >= COVID[0]) & (bh.index <= COVID[1])])
 
-    print(f"=== Full-history sweep 1996-2025 (monthly rebalance, entry DTE<=90) ===")
+    print(f"=== Full-history sweep 1996-2025 (bi-monthly rebalance) ===")
     print(f"Buy & hold: CAGR {bh_cagr:+.2f}%  maxDD {bh_dd:.1f}%  "
           f"(GFC DD {bh_gfc_dd:.1f}%, COVID DD {bh_covid_dd:.1f}%)\n")
     hdr = (f"  {'OTM':7s} {'entry':6s} {'exit':>4s} {'bud':>5s} {'CAGR':>7s} {'excess':>7s} "
