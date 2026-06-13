@@ -134,6 +134,39 @@ def trade_return_histogram(trade_df: pd.DataFrame) -> alt.Chart:
                  title="Per-trade return on premium (distribution)")
 
 
+def holding_period_chart(trade_df: pd.DataFrame) -> alt.Chart:
+    """Distribution of days between entry and exit."""
+    if trade_df.empty:
+        return alt.Chart(pd.DataFrame({"holding_days": []})).mark_bar()
+    data = trade_df[["entry_date", "exit_date"]].copy()
+    data["entry_date"] = pd.to_datetime(data["entry_date"])
+    data["exit_date"] = pd.to_datetime(data["exit_date"])
+    data["holding_days"] = (data["exit_date"] - data["entry_date"]).dt.days
+    return alt.Chart(data).mark_bar(color="steelblue", opacity=0.8).encode(
+        x=alt.X("holding_days:Q", bin=alt.Bin(maxbins=30), title="Holding period (days)"),
+        y=alt.Y("count():Q", title="Trades"),
+        tooltip=[alt.Tooltip("count():Q", title="Trades")],
+    ).properties(width=700, height=180, title="Holding-period distribution")
+
+
+def yearly_pnl_chart(trade_df: pd.DataFrame) -> alt.Chart:
+    """Realized option trade P&L grouped by exit year."""
+    if trade_df.empty or "net_pnl" not in trade_df.columns:
+        return alt.Chart(pd.DataFrame({"year": [], "net_pnl": []})).mark_bar()
+    data = trade_df[["exit_date", "net_pnl"]].copy()
+    data["year"] = pd.to_datetime(data["exit_date"]).dt.year
+    yearly = data.groupby("year", as_index=False)["net_pnl"].sum()
+    yearly["outcome"] = (yearly["net_pnl"] >= 0).map({True: "profit", False: "loss"})
+    return alt.Chart(yearly).mark_bar(opacity=0.85).encode(
+        x=alt.X("year:O", title="Exit year"),
+        y=alt.Y("net_pnl:Q", title="Realized net P&L"),
+        color=alt.Color("outcome:N", title=None,
+                        scale=alt.Scale(domain=["profit", "loss"],
+                                        range=["forestgreen", "coral"])),
+        tooltip=["year:O", alt.Tooltip("net_pnl:Q", format="$,.0f")],
+    ).properties(width=700, height=200, title="Realized options P&L by year")
+
+
 def premium_spend_chart(trade_df: pd.DataFrame,
                         balance: pd.DataFrame,
                         budget_annual_pct: float | None = None,
@@ -279,6 +312,8 @@ __all__ = [
     "normalize_trade_log",
     "options_pnl_decomposition_chart",
     "trade_return_histogram",
+    "holding_period_chart",
+    "yearly_pnl_chart",
     "premium_spend_chart",
     "crash_window_chart",
     "trade_pnl_chart",

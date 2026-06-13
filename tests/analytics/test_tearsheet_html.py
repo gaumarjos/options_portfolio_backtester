@@ -98,13 +98,12 @@ def test_charts_assembles_options_panels():
     report = build_tearsheet(_balance())
     panels = report.charts()
     for expected in ("Equity curve", "Underwater plot", "Rolling Sharpe",
-                     "Annual returns", "Options exposure", "Crash windows"):
+                     "Annual returns", "Capital allocation", "Options exposure",
+                     "Crash windows"):
         assert expected in panels, expected
-    # balance-delta attribution and the allocation stack were dropped from
-    # the default report: the former conflated flows with P&L, the latter
-    # is information-free for a ~100% equity strategy
+    # balance-delta attribution was dropped from the default report: it
+    # conflated flows with P&L. Real option P&L comes from the trade log.
     assert "P&L attribution" not in panels
-    assert "Capital allocation" not in panels
 
 
 def test_charts_skips_unavailable_panels():
@@ -139,6 +138,8 @@ def test_to_html_embeds_charts():
     html = build_tearsheet(_balance()).to_html()
     assert "<html>" in html
     assert "stats-table" in html
+    assert "kpi-grid" in html
+    assert "Summary" in html
     assert "Equity curve" in html
     # charts present either as inline SVG or vega-embed divs
     assert "<svg" in html or "vegaEmbed" in html
@@ -156,11 +157,22 @@ def test_to_file_writes_report(tmp_path):
     assert "<html>" in path.read_text()
 
 
+def test_to_directory_writes_bundle(tmp_path):
+    report = build_tearsheet(_balance(), metadata={"strategy": "demo"})
+    written = report.to_directory(tmp_path / "bundle", include_charts=False)
+    for key in ("report", "stats_table", "monthly_returns", "drawdown_series",
+                "kpi_table", "drawdowns", "metadata"):
+        assert key in written
+        assert written[key].exists()
+
+
 def test_benchmark_appears_in_equity_curve():
     bal = _balance()
     bench = bal.copy()
     bench["total capital"] *= 0.95
     report = build_tearsheet(bal, benchmark_balance=bench)
+    assert not report.benchmark_table.empty
+    assert "Excess CAGR" in report.benchmark_table.index
     chart = report.charts()["Equity curve"]
     spec = chart.to_dict()
     # find the line layer regardless of drawdown-shading/reference layers
@@ -186,11 +198,16 @@ def test_trade_log_supplies_pnls_and_panels():
         entry_order=Order.BTO, exit_order=Order.STC))
     report = build_tearsheet(_balance(), trade_log=tl, budget_annual_pct=0.033)
     assert report.stats.total_trades == 1
+    assert not report.trade_summary.empty
+    assert not report.largest_winners.empty
+    assert not report.yearly_pnl.empty
     panels = report.charts()
     assert "Per-trade P&L" in panels
     assert "Premium spend" in panels
     assert "Options P&L decomposition" in panels
     assert "Trade payoff distribution" in panels
+    assert "Holding periods" in panels
+    assert "Realized P&L by year" in panels
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +258,14 @@ def test_stats_table_gains_extras_and_benchmark_column():
         assert label in table.index, label
     # benchmark is a scaled copy: identical returns => beta 1 vs itself
     assert abs(table.loc["Beta", "Value"] - 1.0) < 1e-6
+    assert "Correlation" in report.benchmark_table.index
+
+
+def test_report_artifact_tables_are_populated():
+    report = build_tearsheet(_balance())
+    assert "CAGR" in report.kpi_table.index
+    assert not report.drawdowns.empty
+    assert report.metadata == {}
 
 
 def test_stats_table_no_benchmark_keeps_single_column():

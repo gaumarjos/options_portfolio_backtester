@@ -40,11 +40,14 @@ EXPECTED_PANELS = [
     "Return distribution",
     "Annual returns",
     "Monthly returns heatmap",
+    "Capital allocation",
     "Options exposure",
     "Crash windows",
     "Options P&L decomposition",
     "Per-trade P&L",
     "Trade payoff distribution",
+    "Holding periods",
+    "Realized P&L by year",
     "Premium spend",
 ]
 

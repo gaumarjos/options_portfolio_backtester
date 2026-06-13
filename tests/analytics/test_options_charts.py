@@ -8,11 +8,13 @@ from options_portfolio_backtester.analytics.options_charts import (
     DEFAULT_CRASH_WINDOWS,
     crash_window_chart,
     exposure_chart,
+    holding_period_chart,
     normalize_trade_log,
     options_pnl_decomposition_chart,
     premium_spend_chart,
     trade_pnl_chart,
     trade_return_histogram,
+    yearly_pnl_chart,
 )
 from options_portfolio_backtester.analytics.trade_log import TradeLog, Trade
 from options_portfolio_backtester.core.types import Order
@@ -144,6 +146,17 @@ def test_crash_window_chart_benchmark_series_present():
 def test_trade_pnl_chart_outcomes():
     chart = trade_pnl_chart(_trade_log().to_dataframe())
     assert set(chart.data["outcome"]) == {"win", "loss"}
+
+
+def test_holding_period_chart_has_days():
+    chart = holding_period_chart(_trade_log().to_dataframe())
+    assert "holding_days" in chart.data.columns
+    assert (chart.data["holding_days"] > 0).all()
+
+
+def test_yearly_pnl_chart_groups_by_exit_year():
+    chart = yearly_pnl_chart(_trade_log().to_dataframe())
+    assert set(chart.data.columns) >= {"year", "net_pnl", "outcome"}
 
 
 def test_exposure_chart_values_are_ratios():

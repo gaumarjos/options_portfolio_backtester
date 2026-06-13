@@ -43,12 +43,16 @@ anchored on the commit hash that introduced the change.
   (balance-column deltas) is replaced by
   ``options_pnl_decomposition_chart`` built from actual trades — the old
   panel conflated rebalancing flows with P&L (day-one cash investment
-  rendered as a −100% "loss"). The allocation stack is dropped from the
-  default report (information-free for ~100% equity strategies;
-  ``weights_area_chart`` remains available). Equity curve defaults to log
-  scale with the top-5 drawdown episodes shaded; the return histogram gets
-  symlog counts plus a fitted-normal overlay; new
-  ``trade_return_histogram`` (per-trade return on premium); rolling Sharpe
+  rendered as a −100% "loss"). The allocation stack (``weights_area_chart``,
+  shown as the "Capital allocation" panel) is gated on the balance carrying
+  a ``stocks capital`` column, so it is emitted for multi-sleeve strategies
+  (e.g. the 97/3 stock+options overlay, where the options sleeve is the
+  point) and skipped for single-sleeve runs where it would be
+  information-free. Equity curve defaults to log scale with the top-5
+  drawdown episodes shaded; the return histogram gets symlog counts plus a
+  fitted-normal overlay; new ``trade_return_histogram`` (per-trade return on
+  premium), ``holding_period_chart`` ("Holding periods" — days from entry to
+  exit), and ``yearly_pnl_chart`` ("Realized P&L by year"); rolling Sharpe
   window widened to 252d; heatmap cells annotated compactly with the color
   domain clamped to ±10% so crash-payoff outliers don't wash out the
   scale. ``tests/oracles/test_article_figures.py`` pins the article's
@@ -257,6 +261,12 @@ anchored on the commit hash that introduced the change.
   ``DeprecationWarning`` pointing at the new name (or at
   ``options_budget_annual_pct`` for %/yr semantics). The Rust config key
   is unchanged.
+- **`run(rebalance_dates=...)` — signal-gated entry.** `BacktestEngine.run`
+  accepts an explicit list of rebalance dates (snapped to the trading
+  calendar), overriding the `rebalance_freq`/`rebalance_unit` schedule, so a
+  caller can buy puts only on dates a regime signal is "on". Default behavior
+  (``None``) is unchanged. Used by the entry-timing research in
+  ``research/spitznagel_spy/signal_experiments.py``.
 - `BacktestEngine.use_external_budget(annual_pct)` and
   `BacktestEngine.use_allocation(stocks, options, cash)` —
   first-class helpers that configure the two put-overlay framings in
