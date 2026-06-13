@@ -78,6 +78,14 @@ pub struct BacktestResult {
     pub trade_log: DataFrame,
     pub final_cash: f64,
     pub stats: Stats,
+    /// Rebalances at which an option entry was attempted (budget available to
+    /// open a position). Together with `option_entry_unfilled` this exposes the
+    /// hedge fill-rate so callers can detect a requested option leg (e.g. a
+    /// deep-OTM strike band) silently matching zero contracts in the data.
+    pub option_entry_attempts: u32,
+    /// Subset of attempts where the entry filter matched no tradeable contract,
+    /// so no hedge was opened that rebalance.
+    pub option_entry_unfilled: u32,
 }
 
 /// Configuration for one strategy slot in a multi-strategy backtest.
@@ -380,6 +388,9 @@ pub fn run_backtest_with_filters(
 
     let mut trade_rows: Vec<TradeRow> = Vec::new();
     let mut balance_days: Vec<BalanceDay> = Vec::new();
+    // Hedge fill-rate diagnostics (see BacktestResult docs).
+    let mut entry_attempts: u32 = 0;
+    let mut entry_unfilled: u32 = 0;
 
     // Pre-compute SMA per stock symbol if sma_days is set
     let sma_map_by_date = config.sma_days
@@ -387,7 +398,8 @@ pub fn run_backtest_with_filters(
 
     let rb_dates = &config.rebalance_dates;
     if rb_dates.is_empty() {
-        return build_result(&trade_rows, &balance_days, &config.legs, cash);
+        return build_result(&trade_rows, &balance_days, &config.legs, cash,
+            entry_attempts, entry_unfilled);
     }
 
     // Pre-compute rebalances per year for annual budget conversion.
@@ -417,6 +429,7 @@ pub fn run_backtest_with_filters(
                     &mut positions, &mut stock_holdings, &mut cash,
                     &mut peak_value, &mut portfolio_greeks,
                     &mut trade_rows, &mut balance_days,
+                    &mut entry_attempts, &mut entry_unfilled,
                 )? {
                     // Note: the original macro's `continue` fired before the
                     // `rb_idx += 1` below, so SkipDate must too.
@@ -485,6 +498,7 @@ pub fn run_backtest_with_filters(
                 &mut positions, &mut stock_holdings, &mut cash,
                 &mut peak_value, &mut portfolio_greeks,
                 &mut trade_rows, &mut balance_days,
+                &mut entry_attempts, &mut entry_unfilled,
             )? {
                 RebalanceOutcome::SkipDate => continue,
                 RebalanceOutcome::StopBroke => break,
@@ -508,7 +522,8 @@ pub fn run_backtest_with_filters(
         );
     }
 
-    build_result(&trade_rows, &balance_days, &config.legs, cash)
+    build_result(&trade_rows, &balance_days, &config.legs, cash,
+        entry_attempts, entry_unfilled)
 }
 
 /// Outcome of a single-date rebalance step. The original macro used `continue`
@@ -545,6 +560,8 @@ fn rebalance_date(
     portfolio_greeks: &mut Greeks,
     trade_rows: &mut Vec<TradeRow>,
     balance_days: &mut Vec<BalanceDay>,
+    entry_attempts: &mut u32,
+    entry_unfilled: &mut u32,
 ) -> PolarsResult<RebalanceOutcome> {
     // _update_balance(prev_rb_date, rb_date)
     compute_balance_period(
@@ -623,6 +640,9 @@ fn rebalance_date(
         options_alloc - options_cap
     };
     if remaining_budget > 0.0 {
+        // An option entry is intended this rebalance (budget is available to
+        // open). Count it so the caller can report the hedge fill-rate.
+        *entry_attempts += 1;
         let held: Vec<String> = positions.iter()
             .flat_map(|p| p.leg_contracts.clone())
             .collect();
@@ -651,8 +671,13 @@ fn rebalance_date(
             }
             *portfolio_greeks += pos.greeks;
             positions.push(pos);
-        } else if externally_funded {
-            *cash -= remaining_budget;
+        } else {
+            // Budget was available but the entry filter matched no tradeable
+            // contract — no hedge opened this rebalance.
+            *entry_unfilled += 1;
+            if externally_funded {
+                *cash -= remaining_budget;
+            }
         }
     }
 
@@ -696,6 +721,9 @@ pub fn run_multi_strategy(
 
     let mut trade_rows: Vec<TradeRow> = Vec::new();
     let mut balance_days: Vec<BalanceDay> = Vec::new();
+    // Hedge fill-rate diagnostics (see BacktestResult docs).
+    let mut entry_attempts: u32 = 0;
+    let mut entry_unfilled: u32 = 0;
 
     // Pre-compute SMA
     let sma_map_by_date = config.sma_days
@@ -729,7 +757,8 @@ pub fn run_multi_strategy(
     if all_rb_dates.is_empty() {
         // Use legs from first slot for result columns
         let legs = if slots.is_empty() { &config.legs } else { &slots[0].legs };
-        return build_result(&trade_rows, &balance_days, legs, cash);
+        return build_result(&trade_rows, &balance_days, legs, cash,
+            entry_attempts, entry_unfilled);
     }
 
     // Determine if any slot uses daily exits
@@ -833,6 +862,7 @@ pub fn run_multi_strategy(
                     slot_allocation - slot_opts_cap
                 };
                 if remaining_budget > 0.0 {
+                    entry_attempts += 1;
                     let held: Vec<String> = slot_positions[si].iter()
                         .flat_map(|p| p.leg_contracts.clone())
                         .collect();
@@ -863,8 +893,11 @@ pub fn run_multi_strategy(
                             cash -= remaining_budget - cost - commission;
                         }
                         slot_positions[si].push(pos);
-                    } else if externally_funded {
-                        cash -= remaining_budget;
+                    } else {
+                        entry_unfilled += 1;
+                        if externally_funded {
+                            cash -= remaining_budget;
+                        }
                     }
                 }
             }
@@ -943,7 +976,8 @@ pub fn run_multi_strategy(
 
     // Use legs from first slot for result columns
     let legs = if slots.is_empty() { &config.legs } else { &slots[0].legs };
-    build_result(&trade_rows, &balance_days, legs, cash)
+    build_result(&trade_rows, &balance_days, legs, cash,
+        entry_attempts, entry_unfilled)
 }
 
 /// Compute balance for multi-strategy across all slot positions.
@@ -1746,6 +1780,8 @@ fn build_result(
     balance_days: &[BalanceDay],
     legs: &[LegConfig],
     final_cash: f64,
+    option_entry_attempts: u32,
+    option_entry_unfilled: u32,
 ) -> PolarsResult<BacktestResult> {
     // Build trade log as flat DataFrame (Python converts to MultiIndex)
     let n_trades = trade_rows.len();
@@ -1852,7 +1888,10 @@ fn build_result(
     let daily_returns = compute_daily_returns(&totals);
     let result_stats = stats::compute_stats(&daily_returns, &[], 0.0);
 
-    Ok(BacktestResult { balance, trade_log, final_cash, stats: result_stats })
+    Ok(BacktestResult {
+        balance, trade_log, final_cash, stats: result_stats,
+        option_entry_attempts, option_entry_unfilled,
+    })
 }
 
 // ---------------------------------------------------------------------------

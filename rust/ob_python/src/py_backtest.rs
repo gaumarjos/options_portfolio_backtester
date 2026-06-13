@@ -332,6 +332,11 @@ pub fn run_backtest_py(
     stats_dict.set_item("win_rate", result.stats.win_rate)?;
     stats_dict.set_item("total_trades", result.stats.total_trades)?;
     stats_dict.set_item("final_cash", result.final_cash)?;
+    // Hedge fill-rate diagnostics: how many rebalances tried to open an option
+    // position vs how many matched no tradeable contract. Lets Python warn when
+    // a requested leg (e.g. a deep-OTM strike band) is silently absent in data.
+    stats_dict.set_item("option_entry_attempts", result.option_entry_attempts)?;
+    stats_dict.set_item("option_entry_unfilled", result.option_entry_unfilled)?;
 
     let result_tuple = pyo3::types::PyTuple::new(py, [
         balance_py.into_pyobject(py)?.into_any(),
@@ -475,6 +480,11 @@ pub fn run_multi_strategy_py(
     stats_dict.set_item("win_rate", result.stats.win_rate)?;
     stats_dict.set_item("total_trades", result.stats.total_trades)?;
     stats_dict.set_item("final_cash", result.final_cash)?;
+    // Hedge fill-rate diagnostics: how many rebalances tried to open an option
+    // position vs how many matched no tradeable contract. Lets Python warn when
+    // a requested leg (e.g. a deep-OTM strike band) is silently absent in data.
+    stats_dict.set_item("option_entry_attempts", result.option_entry_attempts)?;
+    stats_dict.set_item("option_entry_unfilled", result.option_entry_unfilled)?;
 
     let result_tuple = pyo3::types::PyTuple::new(py, [
         balance_py.into_pyobject(py)?.into_any(),

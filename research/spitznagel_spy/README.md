@@ -16,6 +16,7 @@ experiments/              exploratory studies (each standalone, skips if data ab
 findings/                 written-up conclusions (read these first)
   CROSS_UNDERLYING.md
   SIGNAL_EXPERIMENTS.md
+  DATA_COVERAGE.md        deep-OTM puts absent from pre-2003 SPX chain
 figures/                  generated chart output (gitignored)
 ```
 
@@ -36,7 +37,10 @@ python research/spitznagel_spy/experiments/signal_experiments.py
 ## Key findings (one line each — details in `findings/`)
 
 1. **Crash *shape* decides it.** Deep-OTM hedging wins big in fast crashes
-   (GFC +6pp, COVID +11pp) and loses in slow grinds (dot-com −1.7pp).
+   (GFC +6pp, COVID +11pp) and loses in slow grinds (dot-com −1.7pp at
+   25–30% OTM — **the 40–45% depth is not listed in the 2000–2002 SPX chain**,
+   so that band's dot-com number is a coverage artifact; see
+   [`findings/DATA_COVERAGE.md`](findings/DATA_COVERAGE.md)).
 2. **Over the full 1996-2025 it's ~neutral** (+0.95pp at best) — the article's
    strong result is a 2008-start effect; the dot-com grind + calm 2010s offset
    the crash wins.

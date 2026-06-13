@@ -22,6 +22,21 @@ anchored on the commit hash that introduced the change.
 ## Unreleased
 
 ### API changes
+- **Hedge fill-rate diagnostics.** Every run now records how many rebalances
+  attempted to open an option position vs how many matched no tradeable
+  contract, exposed as ``engine.option_entry_attempts``,
+  ``engine.option_entry_unfilled``, and ``engine.option_fill_rate``. When the
+  unfilled fraction exceeds ``BacktestEngine.HEDGE_FILL_WARN_THRESHOLD`` (10%),
+  a ``HedgeFillWarning`` is emitted. This catches a silent failure mode where a
+  strategy's entry filter (commonly a deep-OTM strike band or long-DTE window)
+  finds nothing to buy on some rebalances, degrading the "overlay" into partial
+  buy-and-hold and producing misleading conclusions. Concretely: the article's
+  40–45%-OTM puts only fill 11 of 24 bi-monthly rebalances on 2000–2003 SPX (a
+  20-month gap straddling a −38% decline) because strikes that deep were not
+  listed at 90–180 DTE in that era; the chain reliably supports only ~25–30%
+  OTM before 2003. The Rust core (``BacktestResult.option_entry_attempts`` /
+  ``option_entry_unfilled``) carries the counts across the PyO3 boundary in the
+  stats dict.
 - **Tearsheet with embedded charts.** ``build_tearsheet`` now accepts
   ``benchmark_balance``, ``trade_log`` (any representation: ``TradeLog``,
   flat frame, or the legacy MultiIndex from ``engine.run()``), and

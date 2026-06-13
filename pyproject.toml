@@ -50,7 +50,14 @@ markers = [
     "chaos: chaos / fault-injection tests",
     "smoke: fast qualitative tests suitable for pre-commit / fast CI",
 ]
-filterwarnings = ["ignore::DeprecationWarning"]
+# HedgeFillWarning flags low option fill-rate on REAL data (e.g. deep-OTM
+# strikes absent from old chains). Test fixtures are tiny synthetic chains
+# where partial fills are by design, so it is noise here; the dedicated test
+# (TestHedgeFillDiagnostics) still asserts it fires via catch_warnings.
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::options_portfolio_backtester.engine.engine.HedgeFillWarning",
+]
 
 [tool.mypy]
 python_version = "3.12"

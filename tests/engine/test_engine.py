@@ -191,3 +191,53 @@ class TestRebalanceDatesOverride:
         if not gated_entries.empty:
             entry_dates = pd.to_datetime(gated_entries[("totals", "date")])
             assert (entry_dates >= one_date[0]).all()
+
+
+class TestHedgeFillDiagnostics:
+    """The engine reports a hedge fill-rate so a requested option leg that the
+    data cannot supply (e.g. a deep-OTM strike band absent from old chains) is
+    surfaced instead of silently degrading the overlay to buy-and-hold."""
+
+    def _engine(self, entry_filter_fn=None):
+        opts = _options_data()
+        eng = BacktestEngine({"stocks": 0.97, "options": 0.03, "cash": 0.0},
+                             cost_model=NoCosts())
+        eng.stocks = _ivy_stocks()
+        eng.stocks_data = _stocks_data()
+        eng.options_data = opts
+        schema = opts.schema
+        strat = Strategy(schema)
+        leg = StrategyLeg("leg_1", schema, option_type=Type.PUT, direction=Direction.BUY)
+        leg.entry_filter = (entry_filter_fn(schema) if entry_filter_fn
+                            else (schema.underlying == "SPX") & (schema.dte >= 60))
+        leg.exit_filter = schema.dte <= 30
+        strat.add_legs([leg])
+        eng.options_strategy = strat
+        return eng
+
+    def test_normal_run_fills_and_is_silent(self):
+        import warnings
+        from options_portfolio_backtester.engine.engine import HedgeFillWarning
+        eng = self._engine()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            eng.run(rebalance_freq=1)
+            fired = [x for x in w if issubclass(x.category, HedgeFillWarning)]
+        assert eng.option_entry_attempts >= 1
+        assert eng.option_fill_rate >= 0.9   # a satisfiable filter fills
+        assert not fired
+
+    def test_unsatisfiable_filter_warns_and_reports_zero_fill(self):
+        import warnings
+        from options_portfolio_backtester.engine.engine import HedgeFillWarning
+        # A strike far above any contract in the chain can never match, so every
+        # rebalance attempts an entry and none fill.
+        eng = self._engine(lambda s: (s.underlying == "SPX") & (s.strike > 1e9))
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            eng.run(rebalance_freq=1)
+            fired = [x for x in w if issubclass(x.category, HedgeFillWarning)]
+        assert eng.option_entry_attempts >= 1
+        assert eng.option_entry_unfilled == eng.option_entry_attempts
+        assert eng.option_fill_rate == 0.0
+        assert fired, "expected a HedgeFillWarning when no contract can match"

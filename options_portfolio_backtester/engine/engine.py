@@ -46,6 +46,20 @@ from options_portfolio_backtester.strategy.strategy_leg import StrategyLeg
 logger = logging.getLogger(__name__)
 
 
+class HedgeFillWarning(UserWarning):
+    """Raised when option entries were attempted but matched no contract.
+
+    A non-zero unfilled count means the strategy's entry filter (commonly a
+    deep-OTM strike band or a long-DTE window) found nothing tradeable on some
+    rebalances, so no hedge was opened those periods. This silently turns the
+    "overlay" into partial buy-and-hold and can produce misleading conclusions
+    — most often because the requested strikes simply do not exist in the data
+    for that era (e.g. deep-OTM SPX puts before ~2003). Inspect
+    ``engine.option_fill_rate`` and widen the band / shorten the DTE, or
+    restrict the backtest window to where the chain supports the request.
+    """
+
+
 def _intrinsic_value(option_type: str, strike: float, underlying_price: float) -> float:
     """Compute intrinsic value of an option given spot price.
 
@@ -77,6 +91,11 @@ class BacktestEngine:
     and risk constraints into a single backtest loop.  Dispatches to Rust
     for all supported configurations.
     """
+
+    #: Fraction of option-entry attempts that may go unfilled before a run
+    #: emits :class:`HedgeFillWarning`. A small shortfall (a single missed
+    #: rebalance) is tolerated; a band the data cannot supply is not.
+    HEDGE_FILL_WARN_THRESHOLD: float = 0.10
 
     def __init__(
         self,
@@ -148,6 +167,13 @@ class BacktestEngine:
         self._strategy_slots: list[_StrategySlot] = []
         self._options_inventory: pd.DataFrame | None = None
         self._stocks_inventory: pd.DataFrame | None = None
+
+        # Hedge fill-rate diagnostics, populated after each run. A non-zero
+        # option_entry_unfilled means the option entry filter matched no
+        # tradeable contract on some rebalances (see HedgeFillWarning).
+        self.option_entry_attempts: int = 0
+        self.option_entry_unfilled: int = 0
+        self.option_fill_rate: float = float("nan")
 
         # Seal: any attribute not declared above (or defined on the class) is
         # rejected from here on. Assigning unknown config to an engine must be
@@ -488,6 +514,40 @@ class BacktestEngine:
                 )
         self.algos.clear()
 
+    def _record_entry_diagnostics(self, stats: dict) -> None:
+        """Capture hedge fill-rate from the Rust stats and warn on shortfalls.
+
+        ``stats`` carries ``option_entry_attempts`` (rebalances that tried to
+        open an option position) and ``option_entry_unfilled`` (those that
+        matched no tradeable contract). A non-zero unfilled count means the
+        requested option leg was silently absent on some rebalances — see
+        :class:`HedgeFillWarning`.
+        """
+        import warnings
+        attempts = int(stats.get("option_entry_attempts", 0) or 0)
+        unfilled = int(stats.get("option_entry_unfilled", 0) or 0)
+        self.option_entry_attempts = attempts
+        self.option_entry_unfilled = unfilled
+        self.option_fill_rate = (
+            (attempts - unfilled) / attempts if attempts > 0 else float("nan")
+        )
+        # Warn only on a *material* shortfall — a stray missed rebalance in an
+        # otherwise-full series is not worth crying wolf over, but the exact
+        # counts are always on the engine (option_fill_rate) for inspection.
+        if attempts > 0 and unfilled / attempts >= self.HEDGE_FILL_WARN_THRESHOLD:
+            pct = 100.0 * unfilled / attempts
+            msg = (
+                f"Option entry matched no tradeable contract on {unfilled} of "
+                f"{attempts} rebalances ({pct:.0f}%); fill rate "
+                f"{self.option_fill_rate:.0%}. The strategy's entry filter "
+                f"(e.g. a deep-OTM strike band or long-DTE window) found nothing "
+                f"to buy those periods, so no hedge was opened — results "
+                f"understate the true cost/benefit. The requested strikes may "
+                f"not exist in the data for this window."
+            )
+            warnings.warn(msg, HedgeFillWarning, stacklevel=3)
+            logger.warning(msg)
+
     def _run_rust(
         self,
         rebalance_freq: int,
@@ -625,6 +685,7 @@ class BacktestEngine:
         balance_pl, trade_log_pl, stats = _ob_rust.run_backtest_py(
             opts_pl, stocks_pl, config, schema_mapping,
         )
+        self._record_entry_diagnostics(stats)
 
         # Convert trade log from flat columns to MultiIndex
         trade_log_pd = trade_log_pl.to_pandas()
@@ -814,6 +875,7 @@ class BacktestEngine:
         balance_pl, trade_log_pl, stats = _ob_rust.run_multi_strategy_py(
             opts_pl, stocks_pl, config, schema_mapping, slot_configs,
         )
+        self._record_entry_diagnostics(stats)
 
         # Convert trade log
         trade_log_pd = trade_log_pl.to_pandas()
