@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use pyo3_polars::PyDataFrame;
 
-use ob_core::backtest::{run_backtest, run_multi_strategy, prepartition_data, BacktestConfig, StrategySlotConfig, SchemaMapping};
+use ob_core::backtest::{run_backtest, run_multi_strategy, prepartition_data, BacktestConfig, StrategySlotConfig, SchemaMapping, WhenToBuy};
 use ob_core::cost_model::CostModel;
 use ob_core::fill_model::FillModel;
 use ob_core::risk::RiskConstraint;
@@ -257,6 +257,27 @@ pub fn parse_config_from_dict(config: &Bound<'_, PyDict>) -> PyResult<BacktestCo
         .transpose()?
         .unwrap_or(false);
 
+    // "calendar" (default) = entries only on rebalance dates.
+    // "roll" = entries whenever the option book is flat, on any trading day.
+    let when_to_buy: WhenToBuy = match config
+        .get_item("when_to_buy")?
+        .map(|v| v.extract::<String>())
+        .transpose()?
+        .unwrap_or_else(|| "calendar".to_string())
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "calendar" => WhenToBuy::Calendar,
+        "roll" => WhenToBuy::Roll,
+        "roll+calendar" | "calendar+roll" => WhenToBuy::RollAndCalendar,
+        other => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "when_to_buy must be 'calendar', 'roll' or 'roll+calendar', \
+                 got {other:?}"
+            )))
+        }
+    };
+
     let rebalance_stocks_on_exit: bool = config
         .get_item("rebalance_stocks_on_exit")?
         .map(|v| v.extract::<bool>())
@@ -293,6 +314,7 @@ pub fn parse_config_from_dict(config: &Bound<'_, PyDict>) -> PyResult<BacktestCo
         check_exits_daily,
         options_budget_fresh_spend,
         rebalance_stocks_on_exit,
+        when_to_buy,
         assert_invariants,
     })
 }

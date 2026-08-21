@@ -142,6 +142,24 @@ class BacktestEngine:
         # Rust engine. Off by default; intended for tests/debugging.
         self.assert_invariants: bool = False
 
+        # What triggers opening a new option position:
+        #   "calendar"      — only on rebalance dates (historical behaviour).
+        #                     Note this quietly STACKS, because the default
+        #                     budget model tops up to the allocation rather
+        #                     than spending it fresh.
+        #   "roll"          — on any trading day the option book is flat, so a
+        #                     position closed at its exit DTE is replaced the
+        #                     same day, buying as many contracts as the budget
+        #                     fits. At most one position live at a time;
+        #                     rebalance dates no longer open positions.
+        #   "roll+calendar" — both: replace on close AND top up on rebalance
+        #                     dates. Continuous coverage plus the stacking that
+        #                     plain "roll" gives up. They cannot double-spend:
+        #                     the top-up spends allocation minus held value.
+        # The roll modes need check_exits_daily=True to mean anything: without
+        # it exits only fire on rebalance dates and nothing rolls off between.
+        self.when_to_buy: str = "calendar"
+
         # Per-REBALANCE external put budget (0.05 = 5% of NAV spent on options
         # at every rebalance — with monthly rebalancing that is ~12x the
         # annual figure). Most of the tail-hedge literature speaks in %/yr;
@@ -661,6 +679,7 @@ class BacktestEngine:
             "check_exits_daily": check_exits_daily,
             "rebalance_stocks_on_exit": self.rebalance_stocks_on_exit,
             "assert_invariants": self.assert_invariants,
+            "when_to_buy": self.when_to_buy,
         }
 
         schema_mapping = {
@@ -851,6 +870,7 @@ class BacktestEngine:
             "check_exits_daily": check_exits_daily,
             "rebalance_stocks_on_exit": self.rebalance_stocks_on_exit,
             "assert_invariants": self.assert_invariants,
+            "when_to_buy": self.when_to_buy,
         }
 
         schema_mapping = {

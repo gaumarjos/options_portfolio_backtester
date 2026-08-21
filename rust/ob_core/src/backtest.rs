@@ -71,6 +71,64 @@ pub struct BacktestConfig {
     /// — intended for tests and debugging, not production runs. See
     /// `check_cashflow_invariant` and `check_valuation_envelope`.
     pub assert_invariants: bool,
+    /// What triggers opening a new option position. See `WhenToBuy`.
+    pub when_to_buy: WhenToBuy,
+}
+
+/// What is allowed to trigger opening a new option position.
+///
+/// The engine has no first-class notion of a "roll": exits are DTE-driven and
+/// (with `check_exits_daily`) checked every day, while entries were welded to
+/// the rebalance calendar. A position closing at DTE 30 was therefore not
+/// replaced until the next calendar date — up to a full rebalance period
+/// unhedged, and systematically so right after the hedge paid off, which is
+/// exactly when the winner rolls off.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum WhenToBuy {
+    /// Entries happen only on rebalance dates. Historical behaviour.
+    ///
+    /// Because the budget model is a top-up by default
+    /// (`options_budget_fresh_spend = false` spends `allocation - held value`),
+    /// this quietly STACKS: a rebalance adds a second position whenever the
+    /// existing one has decayed below the allocation. That stacking is where
+    /// much of its crash protection came from, and it is also why it can
+    /// refuse to buy at all when a held put has appreciated past the
+    /// allocation — as happened on 2020-03-02, mid-crash.
+    #[default]
+    Calendar,
+    /// Entries are attempted on ANY trading day the option book is flat, so a
+    /// closed position is replaced the same day it is sold, buying as many
+    /// contracts as the budget fits. Rebalance dates no longer open positions
+    /// (they still run exits and reallocate stocks); being flat is the sole
+    /// trigger, so at most one position is live at a time.
+    ///
+    /// Retrying every flat day, rather than only on the exit date, means a roll
+    /// that finds no tradeable contract self-heals as soon as one exists
+    /// instead of leaving the book bare until the next calendar date.
+    ///
+    /// Needs `check_exits_daily = true` to be meaningful: without it exits only
+    /// fire on rebalance dates and there is nothing to roll off in between.
+    Roll,
+    /// Both triggers: replace the position the day it closes AND let rebalance
+    /// dates top the book up under the usual budget model.
+    ///
+    /// Continuous coverage from the roll, plus the stacking that pure `Roll`
+    /// gives up. The two do not double-spend: a roll entry raises held option
+    /// value, and the calendar top-up spends `allocation - held value`, which
+    /// is then ~zero.
+    RollAndCalendar,
+}
+
+impl WhenToBuy {
+    /// Does being flat trigger an entry on any trading day?
+    fn rolls(self) -> bool {
+        matches!(self, WhenToBuy::Roll | WhenToBuy::RollAndCalendar)
+    }
+
+    /// Do rebalance dates open/top up positions?
+    fn calendar_entries(self) -> bool {
+        matches!(self, WhenToBuy::Calendar | WhenToBuy::RollAndCalendar)
+    }
 }
 
 pub struct BacktestResult {
@@ -452,23 +510,45 @@ pub fn run_backtest_with_filters(
                     RebalanceOutcome::StopBroke => stop_broke = true,
                     RebalanceOutcome::Done => rb_idx += 1,
                 }
-            } else if !positions.is_empty() {
-                // Non-rebalance day: only run exits
+            } else if !positions.is_empty() || config.when_to_buy.rolls() {
+                // Non-rebalance day: run exits, and in Roll mode re-open as
+                // soon as the book is flat.
                 if let Some(day_opts) = partitioned.options.get(&date) {
                     let day_stocks = partitioned.stocks.get(&date);
                     let cash_before = cash;
                     let externally_funded = config.options_budget_pct.is_some()
                         || config.options_budget_annual_pct.is_some();
-                    execute_exits(
-                        &mut positions, &mut cash, day_opts,
-                        config.shares_per_contract,
-                        &config.legs, &exit_filters,
-                        config.profit_pct, config.loss_pct,
-                        schema, date, &mut trade_rows,
-                        &config.cost_model, day_stocks,
-                        externally_funded,
-                        config.assert_invariants,
-                    )?;
+                    if !positions.is_empty() {
+                        execute_exits(
+                            &mut positions, &mut cash, day_opts,
+                            config.shares_per_contract,
+                            &config.legs, &exit_filters,
+                            config.profit_pct, config.loss_pct,
+                            schema, date, &mut trade_rows,
+                            &config.cost_model, day_stocks,
+                            externally_funded,
+                            config.assert_invariants,
+                        )?;
+                    }
+
+                    // Roll: replace the position the same day it closed. Runs
+                    // BEFORE the stock reinvestment below so the premium is
+                    // funded from the sale proceeds rather than competing with
+                    // stock that has already swallowed them — which matters
+                    // only in self-funded mode, since an external budget nets
+                    // to zero cash either way.
+                    if config.when_to_buy.rolls() && positions.is_empty() {
+                        let stock_cap = compute_stock_capital(&stock_holdings, day_stocks);
+                        // Book is flat, so options capital is zero by definition.
+                        let total_capital = cash + stock_cap;
+                        peak_value = peak_value.max(total_capital);
+                        try_enter_options(
+                            config, entry_filters, day_opts, day_stocks, schema, date,
+                            rebalances_per_year, total_capital, peak_value, 0.0,
+                            &mut positions, &mut cash, &mut portfolio_greeks,
+                            &mut trade_rows, &mut entry_attempts, &mut entry_unfilled,
+                        )?;
+                    }
 
                     // Immediately reinvest freed cash into stocks
                     if config.rebalance_stocks_on_exit && cash > cash_before {
@@ -554,6 +634,95 @@ pub fn run_backtest_with_filters(
 
     build_result(&trade_rows, &balance_days, &config.legs, cash,
         entry_attempts, entry_unfilled)
+}
+
+/// Size and attempt one option entry against the configured budget.
+///
+/// Shared by the calendar path (called from `rebalance_date`) and the roll path
+/// (called from the daily loop whenever the book is flat), so both size, fund
+/// and account for an entry identically — in particular the externally-funded
+/// dance of injecting the budget, paying from it, and clawing back whatever was
+/// not spent, which must net to zero cash on every branch including no-fill.
+///
+/// `options_cap` is the market value of positions already held, used by the
+/// non-`fresh_spend` budget model. In roll mode the book is flat by
+/// construction, so it is 0 and the two budget models coincide.
+#[allow(clippy::too_many_arguments)]
+fn try_enter_options(
+    config: &BacktestConfig,
+    entry_filters: &[Option<CompiledFilter>],
+    day_opts: &DayOptions,
+    _day_stocks: Option<&DayStocks>,
+    schema: &SchemaMapping,
+    date: i64,
+    rebalances_per_year: f64,
+    total_capital: f64,
+    peak_value: f64,
+    options_cap: f64,
+    positions: &mut Vec<Position>,
+    cash: &mut f64,
+    portfolio_greeks: &mut Greeks,
+    trade_rows: &mut Vec<TradeRow>,
+    entry_attempts: &mut u32,
+    entry_unfilled: &mut u32,
+) -> PolarsResult<()> {
+    let externally_funded = config.options_budget_pct.is_some()
+        || config.options_budget_annual_pct.is_some();
+
+    let options_alloc = if let Some(pct) = config.options_budget_pct {
+        total_capital * pct
+    } else if let Some(annual) = config.options_budget_annual_pct {
+        total_capital * (annual / rebalances_per_year)
+    } else {
+        config.allocation_options * total_capital
+    };
+    let remaining_budget = if config.options_budget_fresh_spend {
+        options_alloc
+    } else {
+        options_alloc - options_cap
+    };
+    if remaining_budget > 0.0 {
+        // An option entry is intended (budget is available to open). Count it
+        // so the caller can report the hedge fill-rate.
+        *entry_attempts += 1;
+        let held: Vec<String> = positions.iter()
+            .flat_map(|p| p.leg_contracts.clone())
+            .collect();
+
+        if externally_funded {
+            *cash += remaining_budget;
+        }
+
+        if let Some(pos) = execute_entries(
+            &config.legs, entry_filters, day_opts, &held,
+            config.shares_per_contract, remaining_budget,
+            schema, date, trade_rows,
+            &config.fill_model, &config.signal_selector,
+            &config.risk_constraints, portfolio_greeks,
+            total_capital, peak_value,
+            config.max_notional_pct, positions,
+        )? {
+            let cost = pos.entry_cost * pos.quantity;
+            let commission = config.cost_model.option_cost(
+                cost.abs(), pos.quantity, config.shares_per_contract,
+            );
+            *cash -= cost + commission;
+            if externally_funded {
+                // Claw back unspent portion of externally-funded budget
+                *cash -= remaining_budget - cost - commission;
+            }
+            *portfolio_greeks += pos.greeks;
+            positions.push(pos);
+        } else {
+            // Budget was available but the entry filter matched no tradeable
+            // contract — no hedge opened.
+            *entry_unfilled += 1;
+            if externally_funded {
+                *cash -= remaining_budget;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Outcome of a single-date rebalance step. The original macro used `continue`
@@ -643,15 +812,36 @@ fn rebalance_date(
     let total_capital = *cash + stock_cap + options_cap;
     *peak_value = peak_value.max(total_capital);
 
+    // Roll mode: a rebalance date is still just a day, so if the book is flat
+    // it is also a buy trigger. Done BEFORE the stock reallocation below for
+    // the same reason as in the daily loop — so a self-funded premium comes out
+    // of proceeds rather than out of stock that already absorbed them.
+    if config.when_to_buy.rolls() && positions.is_empty() {
+        try_enter_options(
+            config, entry_filters, day_opts, day_stocks, schema, rb_date,
+            rebalances_per_year, total_capital, *peak_value, 0.0,
+            positions, cash, portfolio_greeks, trade_rows,
+            entry_attempts, entry_unfilled,
+        )?;
+    }
+
     // Rebalance stocks
     let externally_funded = config.options_budget_pct.is_some()
         || config.options_budget_annual_pct.is_some();
-    let liquid_capital = total_capital - options_cap;
+    // Re-derive the option/liquid split: a Roll entry above may have opened a
+    // position and, when self-funded, spent cash. In Calendar mode nothing has
+    // changed since `total_capital` was computed, so these are the same
+    // numbers and that path is bit-identical.
+    let held_options_cap = compute_options_capital(
+        positions, day_opts, config.shares_per_contract, day_stocks,
+    );
+    let liquid_capital = *cash + stock_cap;
     let stocks_alloc = if externally_funded {
         config.allocation_stocks * liquid_capital
     } else {
         // Cap to liquid_capital: can't buy stocks with capital locked in options
-        (config.allocation_stocks * total_capital).min(liquid_capital)
+        (config.allocation_stocks * (liquid_capital + held_options_cap))
+            .min(liquid_capital)
     };
     stock_holdings.clear();
     *cash = liquid_capital;
@@ -663,59 +853,16 @@ fn rebalance_date(
         &config.cost_model, cash, sma_prices,
     );
 
-    // Options: buy with remaining budget only
-    let options_alloc = if let Some(pct) = config.options_budget_pct {
-        total_capital * pct
-    } else if let Some(annual) = config.options_budget_annual_pct {
-        total_capital * (annual / rebalances_per_year)
-    } else {
-        config.allocation_options * total_capital
-    };
-    let remaining_budget = if config.options_budget_fresh_spend {
-        options_alloc
-    } else {
-        options_alloc - options_cap
-    };
-    if remaining_budget > 0.0 {
-        // An option entry is intended this rebalance (budget is available to
-        // open). Count it so the caller can report the hedge fill-rate.
-        *entry_attempts += 1;
-        let held: Vec<String> = positions.iter()
-            .flat_map(|p| p.leg_contracts.clone())
-            .collect();
-
-        if externally_funded {
-            *cash += remaining_budget;
-        }
-
-        if let Some(pos) = execute_entries(
-            &config.legs, entry_filters, day_opts, &held,
-            config.shares_per_contract, remaining_budget,
-            schema, rb_date, trade_rows,
-            &config.fill_model, &config.signal_selector,
-            &config.risk_constraints, portfolio_greeks,
-            total_capital, *peak_value,
-            config.max_notional_pct, positions,
-        )? {
-            let cost = pos.entry_cost * pos.quantity;
-            let commission = config.cost_model.option_cost(
-                cost.abs(), pos.quantity, config.shares_per_contract,
-            );
-            *cash -= cost + commission;
-            if externally_funded {
-                // Claw back unspent portion of externally-funded budget
-                *cash -= remaining_budget - cost - commission;
-            }
-            *portfolio_greeks += pos.greeks;
-            positions.push(pos);
-        } else {
-            // Budget was available but the entry filter matched no tradeable
-            // contract — no hedge opened this rebalance.
-            *entry_unfilled += 1;
-            if externally_funded {
-                *cash -= remaining_budget;
-            }
-        }
+    // Options: buy with remaining budget only.
+    // In Roll mode the calendar never opens positions — being flat does, and
+    // that is handled by the caller's per-day check.
+    if config.when_to_buy.calendar_entries() {
+        try_enter_options(
+            config, entry_filters, day_opts, day_stocks, schema, rb_date,
+            rebalances_per_year, total_capital, *peak_value, held_options_cap,
+            positions, cash, portfolio_greeks, trade_rows,
+            entry_attempts, entry_unfilled,
+        )?;
     }
 
     if config.stop_if_broke && *cash < 0.0 {
