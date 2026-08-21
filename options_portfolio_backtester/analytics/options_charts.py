@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import altair as alt
 import numpy as np
+from pathlib import Path
+
 import pandas as pd
 
 from options_portfolio_backtester.analytics.charts import thin_for_chart
@@ -307,6 +309,68 @@ def exposure_chart(balance: pd.DataFrame) -> alt.Chart:
     ).properties(width=700, height=180, title="Options exposure over time")
 
 
+def contracts_held_chart(balance: pd.DataFrame, width: int = 700) -> alt.Chart:
+    """Option contracts held, ONE BAR PER TRADING DAY, for the whole run.
+
+    Answers "was I actually hedged on date X, and by how much?", which no
+    other panel does: "Options exposure" plots market VALUE, so a position
+    whose premium has decayed toward zero looks identical to holding nothing.
+    That is not hypothetical here — deep-OTM puts routinely mark at a 0.00 bid
+    while a real position is open.
+
+    Every trading day is emitted, deliberately un-thinned: `thin_for_chart`
+    would evenly subsample and silently drop the exact days positions open and
+    close. At the default width the bars are sub-pixel and merge into a solid
+    profile; pass a larger ``width`` (and render to PNG) to get one visually
+    distinct bar per day.
+
+    Note the sample is capped by altair's 5000-row serialization limit, i.e.
+    ~20 years of trading days.
+    """
+    if "options qty" not in balance.columns:
+        return alt.Chart(pd.DataFrame({"date": [], "contracts": []})).mark_bar()
+
+    qty = pd.to_numeric(balance["options qty"], errors="coerce").fillna(0.0)
+    qty.index = pd.to_datetime(balance.index)
+    data = qty.rename("contracts").rename_axis("date").reset_index()
+
+    bare = float((qty == 0).mean())
+    subtitle = (f"one bar per trading day — {bare:.1%} of days with no position"
+                if bare else "one bar per trading day — position open every day")
+
+    return alt.Chart(data).mark_bar(color="#2a78d6").encode(
+        x=alt.X("date:T", title="Date"),
+        y=alt.Y("contracts:Q", title="Contracts held",
+                scale=alt.Scale(zero=True)),
+        tooltip=[alt.Tooltip("date:T", title="Date"),
+                 alt.Tooltip("contracts:Q", title="Contracts", format=".0f")],
+    ).properties(
+        width=width, height=180 if width <= 1000 else 420,
+        title=alt.TitleParams("Contracts held per day", subtitle=subtitle),
+    )
+
+
+def save_contracts_held_png(balance: pd.DataFrame, path, px_per_day: float = 2.0,
+                            scale: float = 1.0):
+    """Render `contracts_held_chart` wide enough that each day is its own bar.
+
+    The tearsheet panel is 700px, so ~4500 trading days land at ~0.15px each
+    and merge. This sizes the canvas from the data instead, so one day really
+    is one readable bar. Returns the written Path.
+
+    Needs the optional `charts` extra (vl-convert-python).
+    """
+    import vl_convert as vlc
+
+    n = max(len(balance), 1)
+    width = int(min(n * px_per_day, 20000))
+    chart = contracts_held_chart(balance, width=width)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(vlc.vegalite_to_png(chart.to_json(), scale=scale))
+    return path
+
+
 __all__ = [
     "DEFAULT_CRASH_WINDOWS",
     "normalize_trade_log",
@@ -318,4 +382,6 @@ __all__ = [
     "crash_window_chart",
     "trade_pnl_chart",
     "exposure_chart",
+    "contracts_held_chart",
+    "save_contracts_held_png",
 ]

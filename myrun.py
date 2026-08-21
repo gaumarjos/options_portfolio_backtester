@@ -75,6 +75,7 @@ CAPITALE = 100_000
 WHEN_TO_BUY = "roll+calendar"
 TEARSHEET = "output/{}_tearsheet.html".format(TEST_STR)
 CSV = "output/{}_curve.csv".format(TEST_STR)
+CONTRACTS_PNG = "output/{}_contracts_per_day.png".format(TEST_STR)
 
 
 
@@ -270,6 +271,14 @@ def main():
 
     timeseries = serie_strat.rename("strategia_usd").rename_axis("data")
     timeseries.to_csv(CSV, float_format="%.2f")
+
+    # One bar per trading day is unreadable at the tearsheet's 700px, so also
+    # write a full-width PNG sized from the data (~2px per day).
+    from options_portfolio_backtester.analytics.options_charts import (
+        save_contracts_held_png,
+    )
+    png = save_contracts_held_png(bt.balance, CONTRACTS_PNG)
+    print(f"\nwrote {png}")
 
 
 if __name__ == "__main__":

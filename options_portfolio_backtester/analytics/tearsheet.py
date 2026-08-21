@@ -163,6 +163,10 @@ class TearsheetReport:
             out["Realized P&L by year"] = oc.yearly_pnl_chart(self.trade_df)
             out["Premium spend"] = oc.premium_spend_chart(
                 self.trade_df, self.balance, self.budget_annual_pct)
+        # Last panel: day-by-day contract count. Kept independent of trade_df
+        # so it still renders when only a balance frame is supplied.
+        if "options qty" in self.balance.columns:
+            out["Contracts held"] = oc.contracts_held_chart(self.balance)
         return out
 
     def to_html(self, include_charts: bool = True) -> str:

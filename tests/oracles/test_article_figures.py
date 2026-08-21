@@ -49,6 +49,7 @@ EXPECTED_PANELS = [
     "Holding periods",
     "Realized P&L by year",
     "Premium spend",
+    "Contracts held",
 ]
 
 
