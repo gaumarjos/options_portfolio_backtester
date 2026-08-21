@@ -14,6 +14,7 @@ Backtest options strategies with realistic execution, Greeks-aware risk manageme
 2) Cost of margin if overlay is bought at margin
 3) German taxes
 4) Add SPX and XSP
+5) 
 
 ### ⚠️ Known data traps
 
@@ -52,11 +53,7 @@ maker writes a new contract rather than sourcing an existing one. Real example �
 `SPY200417P00194000` on 2020-01-02 shows `open_interest=2` while `ask_size` was
 3756. They are also unusable before 2012 (87% of 2008 rows carry zero sizes).
 
-**The processed file is only as long as the `--start` you passed.**
-`fetch_data.py` requires `--start`/`--end` and every example in its docstring
-says `2020-01-01`, which silently yields a 2020+ dataset whose only crash is
-COVID. The raw release covers 2008-01-02 to 2025-12-12; rebuild with
-`--start 2008-01-01` (no `--update`; the raw parquets are already local).
+**<p style="text-align:center"> ======== ORIGINAL README FROM HERE ONWARD ======== </p>**
 
 
 ## Get started
