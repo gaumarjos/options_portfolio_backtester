@@ -3,6 +3,62 @@ Options Portfolio Backtester
 
 Backtest options strategies with realistic execution, Greeks-aware risk management, and contract-level inventory. Also handles equities and multi-asset portfolios. Built on a Rust compute core.
 
+
+## My additions:
+1) Fixed backcalculation errors at rebalancing
+2) Roll and calendar+roll scheduling schemes. Goal is to avoid unocovered periods.
+3) Plot with number of contracts held day-by-day
+
+### TODO
+1) Incremental purchasing vs buy-and-hold
+2) Cost of margin if overlay is bought at margin
+3) German taxes
+4) Add SPX and XSP
+
+### ⚠️ Known data traps
+
+**Greeks and IV are unusable before 2010.** In `data/processed/options.parquet`
+the 2008-2009 rows carry a broken implied vol, and delta/gamma/theta/vega are
+derived from it, so they are self-consistently wrong. Median IV is 0.025 in 2008
+and 0.034 in 2009 (vs ~0.20-0.30 from 2010 on); 56% of 2008 rows report IV below
+5%, and 37% have vega and gamma at exactly zero. Concretely, on 2008-11-20 —
+VIX near 80 — the SPY Dec-08 76-strike put is stored with `impliedvol=0.01488`
+and `delta=-0.94589`, while its own stored price of 7.00/7.20 implies ~80% vol
+and a delta near -0.47.
+
+*Prices (bid/ask) are fine* — only the vol-derived fields are affected. So a
+strike-based strategy is unaffected, but anything selecting on delta
+(`NearestDelta`, `deep_otm_put`, a `schema.delta` entry filter) or gating on
+`MaxDelta`/`MaxVega` will silently produce nonsense **exactly across the GFC** —
+the window that dominates tail-hedge results. No error is raised.
+
+This includes `deep_otm_put`, the canonical Spitznagel preset used in the
+quickstart below, which filters on `delta in [-0.10, -0.02]` and sorts by it.
+Share of DTE 90-180 puts passing that delta band, by year:
+
+| 2008 | 2009 | 2010 | 2014 | 2020 | 2024 |
+|------|------|------|------|------|------|
+| 2.24% | 1.61% | 14.4% | 20.6% | 18.5% | 25.0% |
+
+~10x fewer candidates in 2008-2009 — the preset is starved precisely when the
+hedge is supposed to pay. Select on strike (e.g. `strike <= underlying_last *
+0.60`) if the sample includes 2008-2009.
+
+**bid_size / ask_size are dropped by `fetch_data.py`.** They exist in
+`data/raw/release/*.parquet` but not in `data/processed/`, so the processed file
+cannot answer "was this fill size actually available". Do not use `openinterest`
+as a substitute: it counts positions already open, not liquidity, since a market
+maker writes a new contract rather than sourcing an existing one. Real example —
+`SPY200417P00194000` on 2020-01-02 shows `open_interest=2` while `ask_size` was
+3756. They are also unusable before 2012 (87% of 2008 rows carry zero sizes).
+
+**The processed file is only as long as the `--start` you passed.**
+`fetch_data.py` requires `--start`/`--end` and every example in its docstring
+says `2020-01-01`, which silently yields a 2020+ dataset whose only crash is
+COVID. The raw release covers 2008-01-02 to 2025-12-12; rebuild with
+`--start 2008-01-01` (no `--update`; the raw parquets are already local).
+
+
 ## Get started
 
 ### Install
