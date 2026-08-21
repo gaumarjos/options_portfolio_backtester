@@ -203,19 +203,85 @@ def test_spitznagel_spy_baseline(stocks_data):
     )
 
 
+# Memoised so asserting return and path statistics in two tests does not
+# double the number of full backtests.
+_SPITZNAGEL_STATS_CACHE: dict[float, tuple[float, float, float]] = {}
+
+
+def _spitznagel_stats(options_data, stocks_data, budget):
+    if budget not in _SPITZNAGEL_STATS_CACHE:
+        balance = _run_spitznagel(
+            options_data, stocks_data, options_data.schema, budget
+        )
+        _SPITZNAGEL_STATS_CACHE[budget] = _compute_stats(balance)
+    return _SPITZNAGEL_STATS_CACHE[budget]
+
+
+# Rows whose PATH-derived statistics no longer match the published article.
+#
+# The article's max DD and Sharpe were produced before the balance-series
+# look-ahead fix, when compute_balance_period() backfilled each rebalance
+# window from a single end-of-window snapshot. On the daily-exit path that
+# gave the reported equity curve phantom one-day moves (+45.4% on 2008-11-03,
+# +26.9% on 2020-03-02, on dates with no trade at all), which both inflated
+# volatility and set fake running peaks that exaggerated later drawdowns.
+#
+# ANNUAL RETURNS WERE NEVER AFFECTED — terminal capital was always correct —
+# and remain asserted for every budget in test_spitznagel_framing_annual.
+#
+# strict=True is deliberate: if these ever match the published numbers again,
+# the most likely cause is the look-ahead returning, and XPASS will say so
+# loudly. Do not "resolve" this by editing SPITZNAGEL_TABLE — those values are
+# the record of what the article published, not a description of this engine.
+POST_FIX_PATH_DEVIATION = {
+    0.010: "article Sharpe 0.636 vs 0.750 post-fix (pre-fix curve)",
+    0.020: "article max DD -30.8% vs -26.0% post-fix (pre-fix curve)",
+    0.033: "article max DD -30.2% vs -31.4% post-fix (pre-fix curve)",
+}
+
+
+def _budget_params():
+    params = []
+    for budget in sorted(SPITZNAGEL_TABLE):
+        marks = []
+        if budget in POST_FIX_PATH_DEVIATION:
+            marks.append(pytest.mark.xfail(
+                strict=True, reason=POST_FIX_PATH_DEVIATION[budget],
+            ))
+        params.append(pytest.param(budget, marks=marks))
+    return params
+
+
 @requires_data
 @pytest.mark.parametrize("budget", sorted(SPITZNAGEL_TABLE.keys()))
-def test_spitznagel_framing(options_data, stocks_data, budget):
-    """One row of the article's Spitznagel-framing table."""
-    schema = options_data.schema
-    balance = _run_spitznagel(options_data, stocks_data, schema, budget)
-    annual, max_dd, sharpe = _compute_stats(balance)
+def test_spitznagel_framing_annual(options_data, stocks_data, budget):
+    """Annual return for one row of the article's Spitznagel-framing table.
+
+    Kept separate from the path statistics below so that it stays enforced at
+    every budget: it is the assertion that would catch an actual change in
+    trading behaviour, as opposed to a change in how the curve is reported.
+    """
+    annual, _max_dd, _sharpe = _spitznagel_stats(options_data, stocks_data, budget)
     expected = SPITZNAGEL_TABLE[budget]
 
     assert abs(annual - expected["annual"]) < RETURN_TOLERANCE_PP, (
         f"budget {budget*100:.2f}%: annual return drifted from article: "
         f"expected {expected['annual']:.2f}%, got {annual:.2f}%"
     )
+
+
+@requires_data
+@pytest.mark.parametrize("budget", _budget_params())
+def test_spitznagel_framing_path_stats(options_data, stocks_data, budget):
+    """Max drawdown and Sharpe for one row of the article's table.
+
+    Both are derived from the shape of the equity curve rather than its
+    endpoints, so they are the statistics the balance look-ahead corrupted.
+    See POST_FIX_PATH_DEVIATION for the rows that no longer reproduce.
+    """
+    _annual, max_dd, sharpe = _spitznagel_stats(options_data, stocks_data, budget)
+    expected = SPITZNAGEL_TABLE[budget]
+
     assert abs(max_dd - expected["max_dd"]) < DRAWDOWN_TOLERANCE_PP, (
         f"budget {budget*100:.2f}%: max DD drifted from article: "
         f"expected {expected['max_dd']:.1f}%, got {max_dd:.1f}%"
