@@ -167,3 +167,118 @@ class TestBudgetOracles:
             "per-rebalance and annual budgets produced identical runs — "
             "one knob is mis-wired to the other's semantics"
         )
+
+
+# ── Balance-series look-ahead (backfill class) ─────────────────────────
+
+def _engine_with_midwindow_exits():
+    """Engine whose positions close BETWEEN rebalance dates.
+
+    The bundled option chain has DTE 462-550, so the usual `dte <= 30` exit
+    filter never fires and nothing ever changes mid-window — which is exactly
+    the condition under which the backfill bug is invisible. Profit/loss
+    thresholds give us exits on non-rebalance days instead (2014-12-16,
+    2015-01-05, 2015-02-03, 2015-03-03 against month-start rebalances).
+    """
+    eng = _engine({"stocks": 1.0, "options": 0.0, "cash": 0.0},
+                  rebalance_stocks_on_exit=True)
+    eng.options_budget_annual_pct = 0.05
+    eng.options_strategy.add_exit_thresholds(profit_pct=0.2, loss_pct=0.2)
+    eng.run(rebalance_freq=1, rebalance_unit="BMS", check_exits_daily=True)
+    return eng
+
+
+def _open_qty_from_trades(eng):
+    """Independent reconstruction of daily open contracts from the trade log.
+
+    Walks the log chronologically as a running position: BTO adds, STC
+    subtracts, each taking effect at the close of its own day (so a contract
+    bought and sold the same day nets to zero, matching a balance row written
+    at end of day).
+
+    Deliberately NOT keyed on contract id: the bundled chain has a single
+    contract that is re-entered four times, so pairing per contract silently
+    collapses three of the four round trips.
+    """
+    import pandas as pd
+
+    days = pd.to_datetime(eng.balance.index)
+    tl = eng.trade_log.copy()
+    if isinstance(tl.columns, pd.MultiIndex):
+        tl.columns = ["_".join(c) for c in tl.columns]
+    tl["date"] = pd.to_datetime(tl["totals_date"])
+    order_col = next(c for c in tl.columns if c.endswith("_order"))
+
+    delta = pd.Series(0.0, index=days)
+    for _i, row in tl.iterrows():
+        sign = 1.0 if row[order_col] == "BTO" else -1.0
+        d = row["date"]
+        if d in delta.index:
+            delta.loc[d] += sign * float(row["totals_qty"])
+    return delta.cumsum()
+
+
+class TestBalanceSeriesHasNoLookAhead:
+    """`compute_balance_period` backfilled every day in
+    [prev_rebalance, rebalance) from ONE snapshot taken at the END of that
+    window. With check_exits_daily=True the portfolio changes inside the
+    window, so exits — and the stock reinvestment they trigger — were stamped
+    onto days BEFORE they happened.
+
+    Symptoms on the 2008-2025 SPY chain: 29% of days carried a wrong NAV, the
+    equity curve showed one-day jumps of +45.4% (2008-11-03) and +26.9%
+    (2020-03-02) on dates with no trade at all, and `options qty` read 0 on
+    385 days against 129 genuinely uncovered ones. A phantom +45% spike set a
+    fake running peak that then exaggerated every later drawdown.
+
+    Terminal capital was always correct — only the path was wrong — so every
+    return-based oracle passed throughout. These guards watch the path.
+    """
+
+    def test_scenario_actually_exits_between_rebalances(self):
+        """Guard-the-guard: if nothing closes mid-window the checks below are
+        vacuous (as they silently were on the stock `dte <= 30` strategy,
+        which never fires on a 462-DTE chain)."""
+        import pandas as pd
+
+        eng = _engine_with_midwindow_exits()
+        tl = eng.trade_log.copy()
+        if isinstance(tl.columns, pd.MultiIndex):
+            tl.columns = ["_".join(c) for c in tl.columns]
+        order_col = next(c for c in tl.columns if c.endswith("_order"))
+        assert (tl[order_col] == "STC").sum() >= 2, (
+            "scenario produced no mid-window exits — the look-ahead guards "
+            "below would pass trivially"
+        )
+
+    def test_options_qty_matches_trade_log_day_by_day(self):
+        """`options qty` must agree with an independent trade-log
+        reconstruction on every day. Backfilling breaks this: a position
+        opened and closed inside one rebalance window vanishes entirely."""
+        eng = _engine_with_midwindow_exits()
+
+        reported = eng.balance["options qty"].fillna(0.0)
+        expected = _open_qty_from_trades(eng)
+        # Row 0 is the synthetic pre-start row added in Python; skip it.
+        mismatch = ~np.isclose(reported.to_numpy(dtype=float)[1:],
+                               expected.to_numpy(dtype=float)[1:],
+                               rtol=0, atol=1e-9)
+        assert not mismatch.any(), (
+            f"{mismatch.sum()} day(s) where balance 'options qty' disagrees "
+            "with the trade log — balance rows are not written from the state "
+            f"of that day. First: {reported.index[1:][mismatch][:3].tolist()}"
+        )
+
+    def test_options_capital_zero_iff_no_position(self):
+        """Marked option value and reported contract count must agree about
+        whether a position exists. Backfilling desynchronises them: value gets
+        priced per-day while the composition is frozen at end-of-window."""
+        eng = _engine_with_midwindow_exits()
+        qty = eng.balance["options qty"].fillna(0.0).to_numpy(dtype=float)[1:]
+        cap = eng.balance["options capital"].fillna(0.0).to_numpy(dtype=float)[1:]
+        bad = (np.isclose(qty, 0.0) & ~np.isclose(cap, 0.0)) | \
+              (~np.isclose(qty, 0.0) & np.isclose(cap, 0.0))
+        assert not bad.any(), (
+            f"{bad.sum()} day(s) where 'options qty' and 'options capital' "
+            "disagree on whether a position is held"
+        )

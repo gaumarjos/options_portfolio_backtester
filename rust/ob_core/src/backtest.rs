@@ -414,9 +414,22 @@ pub fn run_backtest_with_filters(
 
     if config.check_exits_daily {
         // All-dates loop: check exits on every trading day, rebalance on rb dates.
+        //
+        // Balance rows are recorded HERE, once per day, from the live state at
+        // the end of that day. They must not be backfilled at the next
+        // rebalance: exits (and the stock reinvestment they trigger) mutate the
+        // portfolio mid-window, so a single end-of-window snapshot would stamp
+        // later holdings onto earlier dates and hand the equity curve
+        // look-ahead it never had in the simulation.
         use std::collections::HashSet;
         let rb_set: HashSet<i64> = rb_dates.iter().copied().collect();
         let mut rb_idx: usize = 0;
+        // Preserve the row range the backfill produced: [rb_dates[0], last_date).
+        // Widening it is a separate change; keeping it identical here makes this
+        // fix provably about composition only.
+        let first_rb = rb_dates[0];
+        let last_date = partitioned.all_dates_sorted.last().copied().unwrap_or(i64::MAX);
+        let mut stop_broke = false;
 
         for &date in &partitioned.all_dates_sorted {
             if rb_set.contains(&date) {
@@ -430,14 +443,15 @@ pub fn run_backtest_with_filters(
                     &mut peak_value, &mut portfolio_greeks,
                     &mut trade_rows, &mut balance_days,
                     &mut entry_attempts, &mut entry_unfilled,
+                    false,
                 )? {
-                    // Note: the original macro's `continue` fired before the
-                    // `rb_idx += 1` below, so SkipDate must too.
-                    RebalanceOutcome::SkipDate => continue,
-                    RebalanceOutcome::StopBroke => break,
-                    RebalanceOutcome::Done => {}
+                    // SkipDate must not advance rb_idx (matches the original
+                    // macro, whose `continue` fired before the increment); the
+                    // day is still recorded below.
+                    RebalanceOutcome::SkipDate => {}
+                    RebalanceOutcome::StopBroke => stop_broke = true,
+                    RebalanceOutcome::Done => rb_idx += 1,
                 }
-                rb_idx += 1;
             } else if !positions.is_empty() {
                 // Non-rebalance day: only run exits
                 if let Some(day_opts) = partitioned.options.get(&date) {
@@ -485,6 +499,19 @@ pub fn run_backtest_with_filters(
                     }
                 }
             }
+
+            // Record the day from the state it actually ended in. Runs for
+            // every date, including days with no position and rebalance dates
+            // that returned SkipDate, so the series has no holes.
+            if date >= first_rb && date < last_date {
+                push_balance_day(
+                    &positions, &stock_holdings, partitioned, date,
+                    config.shares_per_contract, cash, &config.legs,
+                    &mut balance_days,
+                );
+            }
+
+            if stop_broke { break; }
         }
     } else {
         // Fast path: iterate only rebalance dates (typical: ~200 vs ~4500 all dates).
@@ -499,27 +526,30 @@ pub fn run_backtest_with_filters(
                 &mut peak_value, &mut portfolio_greeks,
                 &mut trade_rows, &mut balance_days,
                 &mut entry_attempts, &mut entry_unfilled,
+                true,
             )? {
                 RebalanceOutcome::SkipDate => continue,
                 RebalanceOutcome::StopBroke => break,
                 RebalanceOutcome::Done => {}
             }
         }
-    }
 
-    // Final balance update: last rebalance date to end of data
-    let last_rb = *rb_dates.last().unwrap();
-    let last_date = partitioned.all_dates_sorted.last().copied().unwrap_or(0);
+        // Final balance update: last rebalance date to end of data. Only the
+        // fast path needs this — the daily loop already recorded every date as
+        // it walked, so backfilling here would duplicate rows.
+        let last_rb = *rb_dates.last().unwrap();
+        let last_date = partitioned.all_dates_sorted.last().copied().unwrap_or(0);
 
-    if last_date > 0 {
-        compute_balance_period(
-            &positions, &stock_holdings,
-            &partitioned,
-            last_rb, last_date,
-            config.shares_per_contract, cash,
-            &config.legs,
-            &mut balance_days,
-        );
+        if last_date > 0 {
+            compute_balance_period(
+                &positions, &stock_holdings,
+                &partitioned,
+                last_rb, last_date,
+                config.shares_per_contract, cash,
+                &config.legs,
+                &mut balance_days,
+            );
+        }
     }
 
     build_result(&trade_rows, &balance_days, &config.legs, cash,
@@ -562,16 +592,23 @@ fn rebalance_date(
     balance_days: &mut Vec<BalanceDay>,
     entry_attempts: &mut u32,
     entry_unfilled: &mut u32,
+    write_balance_period: bool,
 ) -> PolarsResult<RebalanceOutcome> {
     // _update_balance(prev_rb_date, rb_date)
-    compute_balance_period(
-        positions, stock_holdings,
-        partitioned,
-        prev_rb_date, rb_date,
-        config.shares_per_contract, *cash,
-        &config.legs,
-        balance_days,
-    );
+    //
+    // Only valid when the portfolio was static across [prev_rb_date, rb_date).
+    // The daily-exit loop mutates state inside that window, so it passes
+    // `false` here and records each day itself as that day is walked.
+    if write_balance_period {
+        compute_balance_period(
+            positions, stock_holdings,
+            partitioned,
+            prev_rb_date, rb_date,
+            config.shares_per_contract, *cash,
+            &config.legs,
+            balance_days,
+        );
+    }
 
     let day_opts = match partitioned.options.get(&rb_date) {
         Some(d) if d.height() > 0 => d,
@@ -768,6 +805,15 @@ pub fn run_multi_strategy(
     // Track previous rebalance date for balance computation
     let mut prev_global_rb: Option<i64> = None;
 
+    // When any slot checks exits daily the portfolio changes BETWEEN rebalance
+    // dates, so the end-of-window backfill would stamp later holdings onto
+    // earlier days (look-ahead). In that case record each day as it is walked
+    // instead. Row range is kept identical to the backfill's:
+    // [first rebalance date, last_date).
+    let first_rb_multi = all_rb_dates[0];
+    let last_date_multi = partitioned.all_dates_sorted.last().copied().unwrap_or(i64::MAX);
+    let mut stop_broke_multi = false;
+
     for &date in &partitioned.all_dates_sorted {
         let is_rebalance = all_rb_set.contains(&date);
 
@@ -780,19 +826,24 @@ pub fn run_multi_strategy(
             Vec::new()
         };
 
-        if is_rebalance {
+        if is_rebalance { 'rebalance: {
             // Compute balance since previous rebalance
             let prev_rb = prev_global_rb.unwrap_or(date);
-            compute_balance_period_multi(
-                &slot_positions, &stock_holdings, partitioned,
-                prev_rb, date, config.shares_per_contract, cash,
-                slots, &mut balance_days,
-            );
+            if !any_daily_exits {
+                compute_balance_period_multi(
+                    &slot_positions, &stock_holdings, partitioned,
+                    prev_rb, date, config.shares_per_contract, cash,
+                    slots, &mut balance_days,
+                );
+            }
             prev_global_rb = Some(date);
 
             let day_opts = match partitioned.options.get(&date) {
                 Some(d) if d.height() > 0 => d,
-                _ => continue,
+                // No option rows today: nothing to rebalance, but the day must
+                // still be recorded below, so leave the block rather than the
+                // enclosing loop.
+                _ => break 'rebalance,
             };
             let day_stocks = partitioned.stocks.get(&date);
 
@@ -903,9 +954,10 @@ pub fn run_multi_strategy(
             }
 
             if config.stop_if_broke && cash < 0.0 {
-                break;
+                stop_broke_multi = true;
+                break 'rebalance;
             }
-        } else if any_daily_exits {
+        }} else if any_daily_exits {
             // Non-rebalance day: run exits for slots with check_exits_daily
             if let Some(day_opts) = partitioned.options.get(&date) {
                 let day_stocks = partitioned.stocks.get(&date);
@@ -960,17 +1012,31 @@ pub fn run_multi_strategy(
                 }
             }
         }
+
+        // Daily-exit mode records each day from the state it actually ended in,
+        // instead of backfilling the window at the next rebalance.
+        if any_daily_exits && date >= first_rb_multi && date < last_date_multi {
+            push_balance_day_multi(
+                &slot_positions, &stock_holdings, partitioned, date,
+                config.shares_per_contract, cash, slots, &mut balance_days,
+            );
+        }
+
+        if stop_broke_multi { break; }
     }
 
-    // Final balance update
-    if let Some(last_rb) = prev_global_rb {
-        let last_date = partitioned.all_dates_sorted.last().copied().unwrap_or(0);
-        if last_date > 0 {
-            compute_balance_period_multi(
-                &slot_positions, &stock_holdings, partitioned,
-                last_rb, last_date, config.shares_per_contract, cash,
-                slots, &mut balance_days,
-            );
+    // Final balance update — only for the backfill path; the daily-exit path
+    // already recorded every date as it walked.
+    if !any_daily_exits {
+        if let Some(last_rb) = prev_global_rb {
+            let last_date = partitioned.all_dates_sorted.last().copied().unwrap_or(0);
+            if last_date > 0 {
+                compute_balance_period_multi(
+                    &slot_positions, &stock_holdings, partitioned,
+                    last_rb, last_date, config.shares_per_contract, cash,
+                    slots, &mut balance_days,
+                );
+            }
         }
     }
 
@@ -980,7 +1046,76 @@ pub fn run_multi_strategy(
         entry_attempts, entry_unfilled)
 }
 
-/// Compute balance for multi-strategy across all slot positions.
+/// Multi-strategy twin of `push_balance_day`: value all slots' positions as of
+/// a single date `d` and append one `BalanceDay`. Composition comes from the
+/// caller's live state; only prices come from `d`.
+#[allow(clippy::too_many_arguments)]
+fn push_balance_day_multi(
+    slot_positions: &[Vec<Position>],
+    stock_holdings: &[StockHolding],
+    partitioned: &PartitionedData,
+    d: i64,
+    spc: i64,
+    cash: f64,
+    slots: &[StrategySlotConfig],
+    balance_days: &mut Vec<BalanceDay>,
+) {
+    let day_opts = partitioned.options.get(&d);
+    let day_stocks = partitioned.stocks.get(&d);
+
+    let mut calls_cap = 0.0;
+    let mut puts_cap = 0.0;
+    let mut options_qty = 0.0;
+
+    if let Some(opts) = day_opts {
+        for (si, positions) in slot_positions.iter().enumerate() {
+            let legs = &slots[si].legs;
+            for pos in positions {
+                options_qty += pos.quantity;
+                for (j, leg) in legs.iter().enumerate() {
+                    if j >= pos.leg_contracts.len() { continue; }
+                    let exit_price_col = leg.direction.invert().price_column();
+                    let price = opts.get_f64(&pos.leg_contracts[j], exit_price_col)
+                        .unwrap_or_else(|| {
+                            let spot = day_stocks
+                                .and_then(|ds| ds.get_unadj_price(&pos.leg_underlyings[j]))
+                                .unwrap_or(0.0);
+                            intrinsic_value(&pos.leg_types[j], pos.leg_strikes[j], spot)
+                        });
+                    let sign = leg.direction.invert().sign();
+                    let value = sign * price * pos.quantity * spc as f64;
+                    if pos.leg_types[j] == "call" {
+                        calls_cap += value;
+                    } else {
+                        puts_cap += value;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut stock_values = Vec::new();
+    let mut stock_qtys = Vec::new();
+    let mut stocks_qty = 0.0;
+    for holding in stock_holdings {
+        let price = day_stocks
+            .and_then(|ds| ds.get_price(&holding.symbol))
+            .unwrap_or(holding.price);
+        stock_values.push((holding.symbol.clone(), holding.qty * price));
+        stock_qtys.push((holding.symbol.clone(), holding.qty));
+        stocks_qty += holding.qty;
+    }
+
+    balance_days.push(BalanceDay {
+        date: d, cash, calls_capital: calls_cap, puts_capital: puts_cap,
+        options_qty, stocks_qty, stock_values, stock_qtys,
+    });
+}
+
+/// Backfill `[start_date, end_date)` for multi-strategy from a SINGLE snapshot.
+/// Same caveat as `compute_balance_period`: only valid when nothing changed
+/// inside the range, i.e. when no slot checks exits daily.
+#[allow(clippy::too_many_arguments)]
 fn compute_balance_period_multi(
     slot_positions: &[Vec<Position>],
     stock_holdings: &[StockHolding],
@@ -997,56 +1132,9 @@ fn compute_balance_period_multi(
     let end_idx = dates.partition_point(|&d| d < end_date);
 
     for &d in &dates[start_idx..end_idx] {
-        let day_opts = partitioned.options.get(&d);
-        let day_stocks = partitioned.stocks.get(&d);
-
-        let mut calls_cap = 0.0;
-        let mut puts_cap = 0.0;
-        let mut options_qty = 0.0;
-
-        if let Some(opts) = day_opts {
-            for (si, positions) in slot_positions.iter().enumerate() {
-                let legs = &slots[si].legs;
-                for pos in positions {
-                    options_qty += pos.quantity;
-                    for (j, leg) in legs.iter().enumerate() {
-                        if j >= pos.leg_contracts.len() { continue; }
-                        let exit_price_col = leg.direction.invert().price_column();
-                        let price = opts.get_f64(&pos.leg_contracts[j], exit_price_col)
-                            .unwrap_or_else(|| {
-                                let spot = day_stocks
-                                    .and_then(|ds| ds.get_unadj_price(&pos.leg_underlyings[j]))
-                                    .unwrap_or(0.0);
-                                intrinsic_value(&pos.leg_types[j], pos.leg_strikes[j], spot)
-                            });
-                        let sign = leg.direction.invert().sign();
-                        let value = sign * price * pos.quantity * spc as f64;
-                        if pos.leg_types[j] == "call" {
-                            calls_cap += value;
-                        } else {
-                            puts_cap += value;
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut stock_values = Vec::new();
-        let mut stock_qtys = Vec::new();
-        let mut stocks_qty = 0.0;
-        for holding in stock_holdings {
-            let price = day_stocks
-                .and_then(|ds| ds.get_price(&holding.symbol))
-                .unwrap_or(holding.price);
-            stock_values.push((holding.symbol.clone(), holding.qty * price));
-            stock_qtys.push((holding.symbol.clone(), holding.qty));
-            stocks_qty += holding.qty;
-        }
-
-        balance_days.push(BalanceDay {
-            date: d, cash, calls_capital: calls_cap, puts_capital: puts_cap,
-            options_qty, stocks_qty, stock_values, stock_qtys,
-        });
+        push_balance_day_multi(
+            slot_positions, stock_holdings, partitioned, d, spc, cash, slots, balance_days,
+        );
     }
 }
 
@@ -1655,6 +1743,91 @@ fn execute_entries(
 // Compute balance for a date range — uses pre-partitioned data.
 // ---------------------------------------------------------------------------
 
+/// Value the portfolio as of a single date `d` and append one `BalanceDay`.
+///
+/// Prices come from `d`'s market data; the COMPOSITION (positions, holdings,
+/// cash) is whatever the caller passes. Callers that walk day by day should
+/// pass their live state so each row describes that day as it actually was;
+/// `compute_balance_period` instead reuses one composition across a range,
+/// which is only valid when nothing changed inside it (see its docs).
+#[allow(clippy::too_many_arguments)]
+fn push_balance_day(
+    positions: &[Position],
+    stock_holdings: &[StockHolding],
+    partitioned: &PartitionedData,
+    d: i64,
+    spc: i64,
+    cash: f64,
+    legs: &[LegConfig],
+    balance_days: &mut Vec<BalanceDay>,
+) {
+    let day_opts = partitioned.options.get(&d);
+    let day_stocks = partitioned.stocks.get(&d);
+
+    // Compute calls/puts capital for each position
+    let mut calls_cap = 0.0;
+    let mut puts_cap = 0.0;
+    let mut options_qty = 0.0;
+
+    if let Some(opts) = day_opts {
+        for pos in positions {
+            options_qty += pos.quantity;
+            for (j, leg) in legs.iter().enumerate() {
+                if j >= pos.leg_contracts.len() { continue; }
+                let exit_price_col = leg.direction.invert().price_column();
+                let price = opts.get_f64(&pos.leg_contracts[j], exit_price_col)
+                    .unwrap_or_else(|| {
+                        let spot = day_stocks
+                            .and_then(|ds| ds.get_unadj_price(&pos.leg_underlyings[j]))
+                            .unwrap_or(0.0);
+                        intrinsic_value(&pos.leg_types[j], pos.leg_strikes[j], spot)
+                    });
+                let sign = leg.direction.invert().sign();
+                let value = sign * price * pos.quantity * spc as f64;
+
+                if pos.leg_types[j] == "call" {
+                    calls_cap += value;
+                } else {
+                    puts_cap += value;
+                }
+            }
+        }
+    }
+
+    // Compute stock values
+    let mut stock_values = Vec::new();
+    let mut stock_qtys = Vec::new();
+    let mut stocks_qty = 0.0;
+    for holding in stock_holdings {
+        let price = day_stocks
+            .and_then(|ds| ds.get_price(&holding.symbol))
+            .unwrap_or(holding.price);
+        stock_values.push((holding.symbol.clone(), holding.qty * price));
+        stock_qtys.push((holding.symbol.clone(), holding.qty));
+        stocks_qty += holding.qty;
+    }
+
+    balance_days.push(BalanceDay {
+        date: d,
+        cash,
+        calls_capital: calls_cap,
+        puts_capital: puts_cap,
+        options_qty,
+        stocks_qty,
+        stock_values,
+        stock_qtys,
+    });
+}
+
+/// Backfill `[start_date, end_date)` from a SINGLE composition snapshot.
+///
+/// Only correct when the portfolio did not change inside the range — i.e. the
+/// rebalance-only fast path, where by construction nothing happens between
+/// rebalance dates. When exits are checked daily the portfolio DOES change
+/// mid-range, and using this would stamp end-of-range holdings onto earlier
+/// days (a look-ahead artifact); that path walks day by day and calls
+/// `push_balance_day` per date instead.
+#[allow(clippy::too_many_arguments)]
 fn compute_balance_period(
     positions: &[Position],
     stock_holdings: &[StockHolding],
@@ -1672,62 +1845,9 @@ fn compute_balance_period(
     let end_idx = dates.partition_point(|&d| d < end_date);
 
     for &d in &dates[start_idx..end_idx] {
-        let day_opts = partitioned.options.get(&d);
-        let day_stocks = partitioned.stocks.get(&d);
-
-        // Compute calls/puts capital for each position
-        let mut calls_cap = 0.0;
-        let mut puts_cap = 0.0;
-        let mut options_qty = 0.0;
-
-        if let Some(opts) = day_opts {
-            for pos in positions {
-                options_qty += pos.quantity;
-                for (j, leg) in legs.iter().enumerate() {
-                    if j >= pos.leg_contracts.len() { continue; }
-                    let exit_price_col = leg.direction.invert().price_column();
-                    let price = opts.get_f64(&pos.leg_contracts[j], exit_price_col)
-                        .unwrap_or_else(|| {
-                            let spot = day_stocks
-                                .and_then(|ds| ds.get_unadj_price(&pos.leg_underlyings[j]))
-                                .unwrap_or(0.0);
-                            intrinsic_value(&pos.leg_types[j], pos.leg_strikes[j], spot)
-                        });
-                    let sign = leg.direction.invert().sign();
-                    let value = sign * price * pos.quantity * spc as f64;
-
-                    if pos.leg_types[j] == "call" {
-                        calls_cap += value;
-                    } else {
-                        puts_cap += value;
-                    }
-                }
-            }
-        }
-
-        // Compute stock values
-        let mut stock_values = Vec::new();
-        let mut stock_qtys = Vec::new();
-        let mut stocks_qty = 0.0;
-        for holding in stock_holdings {
-            let price = day_stocks
-                .and_then(|ds| ds.get_price(&holding.symbol))
-                .unwrap_or(holding.price);
-            stock_values.push((holding.symbol.clone(), holding.qty * price));
-            stock_qtys.push((holding.symbol.clone(), holding.qty));
-            stocks_qty += holding.qty;
-        }
-
-        balance_days.push(BalanceDay {
-            date: d,
-            cash,
-            calls_capital: calls_cap,
-            puts_capital: puts_cap,
-            options_qty,
-            stocks_qty,
-            stock_values,
-            stock_qtys,
-        });
+        push_balance_day(
+            positions, stock_holdings, partitioned, d, spc, cash, legs, balance_days,
+        );
     }
 }
 

@@ -130,3 +130,6 @@ data/processed/*
 
 # Generated article figures (rebuild with research/spitznagel_spy/make_figures.py)
 research/spitznagel_spy/figures/
+
+# Mystuff
+output/*

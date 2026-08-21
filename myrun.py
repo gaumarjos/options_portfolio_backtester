@@ -126,11 +126,19 @@ def _flat_trades(bt):
 def coverage(bt):
     """Days holding no put at all ("uncovered").
 
-    Reconstructed from trade_log by pairing BTO->STC per contract, NOT from
-    bt.balance["options qty"]: that column reports 0 on days where the trade
-    log shows open positions, so it understates coverage. The engine backfills
-    each [prev_rebalance, rebalance) window with the state as of the END of the
-    window, so any position opened and closed inside a window never appears.
+    Reconstructed from trade_log by pairing BTO->STC per contract. This is kept
+    as an INDEPENDENT cross-check of bt.balance["options qty"] rather than
+    reading that column directly: the two now agree day-for-day, and any future
+    divergence means one of them has regressed.
+
+    (Before the compute_balance_period fix, "options qty" was backfilled with
+    end-of-window state and disagreed badly -- 385 bare days vs 129 -- because
+    a position opened and closed inside one rebalance window never appeared.
+    That is fixed; the column is trustworthy now.)
+
+    Convention: a position is counted open from its entry date up to but NOT
+    including its exit date -- you sold that day, so you end it flat. A position
+    never closed stays open through the final row.
 
     Exits are DTE-driven (checked every day when check_exits_daily=True) but
     entries happen ONLY on rebalance dates: the gaps come from that mismatch,
@@ -147,8 +155,11 @@ def coverage(bt):
         if bto.empty:
             continue
         start = bto["date"].iloc[0]
-        end = stc["date"].iloc[0] if not stc.empty else days[-1]
-        open_count.loc[(days >= start) & (days <= end)] += 1
+        if stc.empty:
+            held = days >= start
+        else:
+            held = (days >= start) & (days < stc["date"].iloc[0])
+        open_count.loc[held] += 1
 
     uncovered = open_count == 0
     blocks = (uncovered != uncovered.shift()).cumsum()
