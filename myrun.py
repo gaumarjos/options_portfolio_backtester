@@ -76,6 +76,7 @@ WHEN_TO_BUY = "roll+calendar"
 TEARSHEET = "output/{}_tearsheet.html".format(TEST_STR)
 CSV = "output/{}_curve.csv".format(TEST_STR)
 CONTRACTS_PNG = "output/{}_contracts_per_day.png".format(TEST_STR)
+TRADES_CSV = "output/{}_trades.csv".format(TEST_STR)
 
 
 
@@ -231,6 +232,134 @@ def print_coverage(bt):
 # 90-180 DTE).
 
 
+# Raw release chain carries bid_size/ask_size, which the processed parquet
+# drops. Those are the only true fill-size constraint, so the trade log reads
+# them straight from the raw file when it is present.
+RAW_CHAIN = "data/raw/release/SPY_options.parquet"
+
+
+def write_trade_log(bt, path):
+    """One CSV row per trade, with every field available for that trade.
+
+    Beyond what bt.trade_log carries (date, order, contract, strike, qty,
+    price), each row is enriched with:
+
+      * the full quote that day  — bid/ask/mid/spread, and bid_size/ask_size
+        from the RAW chain. ask_size is the real fill constraint: open
+        interest is NOT, since a market maker writes a new contract rather
+        than sourcing an existing one. A contract can show open_interest=2
+        and still have thousands offered.
+      * liquidity realism      — qty as a share of the displayed offer size
+      * moneyness and greeks   — spot, strike/spot, %OTM, IV, delta..vega
+      * portfolio context      — NAV that day, spend as % of NAV, notional
+      * round-trip linkage     — trade_id pairing each exit to its entry
+        (FIFO per contract, since a contract can be re-entered), holding
+        days, and realized P&L booked on the exit row.
+    """
+    import numpy as np
+
+    tl = _flat_trades(bt).copy()
+    tl["exp"] = pd.to_datetime(tl["leg_1_expiration"])
+    tl = tl.sort_values("date").reset_index(drop=True)
+
+    # --- round-trip pairing: FIFO per contract -------------------------
+    tl["trade_id"] = pd.NA
+    tl["holding_days"] = pd.NA
+    tl["realized_pnl"] = pd.NA
+    queues, next_id = {}, 1
+    for i, r in tl.iterrows():
+        c = r["leg_1_contract"]
+        if r["leg_1_order"] == "BTO":
+            tl.at[i, "trade_id"] = next_id
+            queues.setdefault(c, []).append((next_id, r["date"],
+                                             r["totals_cost"], r["totals_qty"]))
+            next_id += 1
+        else:
+            q = queues.get(c) or []
+            if q:
+                tid, edate, ecost, eqty = q.pop(0)
+                tl.at[i, "trade_id"] = tid
+                tl.at[i, "holding_days"] = (r["date"] - edate).days
+                # entry paid ecost/contract, exit receives -cost/contract
+                tl.at[i, "realized_pnl"] = (
+                    (-r["totals_cost"]) * r["totals_qty"] - ecost * eqty)
+
+    # --- market context from the processed chain -----------------------
+    import pyarrow.parquet as pq
+    dates = sorted(set(tl["date"]))
+    proc = pq.read_table(
+        "data/processed/options.parquet",
+        filters=[("quotedate", "in", dates)],
+        columns=["quotedate", "optionroot", "underlying_last", "bid", "ask",
+                 "volume", "openinterest", "impliedvol", "delta", "gamma",
+                 "theta", "vega"],
+    ).to_pandas()
+    out = tl.merge(proc, left_on=["date", "leg_1_contract"],
+                   right_on=["quotedate", "optionroot"], how="left")
+
+    # --- displayed size from the raw chain, when available -------------
+    if Path(RAW_CHAIN).exists():
+        raw = pq.read_table(
+            RAW_CHAIN,
+            filters=[("date", "in", dates), ("type", "=", "put")],
+            columns=["date", "expiration", "strike", "bid_size", "ask_size"],
+        ).to_pandas()
+        out = out.merge(raw, left_on=["date", "exp", "leg_1_strike"],
+                        right_on=["date", "expiration", "strike"], how="left")
+    else:
+        out["bid_size"] = np.nan
+        out["ask_size"] = np.nan
+
+    nav = bt.balance["total capital"]
+    nav.index = pd.to_datetime(nav.index)
+
+    df = pd.DataFrame({
+        "trade_id": out["trade_id"],
+        "date": out["date"].dt.date,
+        "order": out["leg_1_order"],
+        "contract": out["leg_1_contract"],
+        "underlying": out["leg_1_underlying"],
+        "type": out["leg_1_type"],
+        "strike": out["leg_1_strike"],
+        "expiration": out["exp"].dt.date,
+        "dte": (out["exp"] - out["date"]).dt.days,
+        "qty_contracts": out["totals_qty"],
+        "price_per_contract": out["totals_cost"],
+        "dollars": out["totals_cost"] * out["totals_qty"],
+        "spot": out["underlying_last"],
+        "strike_pct_of_spot": out["leg_1_strike"] / out["underlying_last"],
+        "pct_otm": 1 - out["leg_1_strike"] / out["underlying_last"],
+        "bid": out["bid"], "ask": out["ask"],
+        "mid": (out["bid"] + out["ask"]) / 2,
+        "spread": out["ask"] - out["bid"],
+        "spread_pct_of_ask": (out["ask"] - out["bid"]) / out["ask"].replace(0, np.nan),
+        "bid_size": out["bid_size"], "ask_size": out["ask_size"],
+        # You lift the OFFER to buy and hit the BID to sell, so the size that
+        # constrains a fill is the opposite side per order type. Comparing a
+        # sell against ask_size (or vice versa) is meaningless.
+        "size_at_touch": np.where(out["leg_1_order"] == "BTO",
+                                  out["ask_size"], out["bid_size"]),
+        "qty_pct_of_size_at_touch": out["totals_qty"] / pd.Series(
+            np.where(out["leg_1_order"] == "BTO",
+                     out["ask_size"], out["bid_size"]),
+            index=out.index).replace(0, np.nan),
+        "volume": out["volume"], "open_interest": out["openinterest"],
+        "implied_vol": out["impliedvol"],
+        "delta": out["delta"], "gamma": out["gamma"],
+        "theta": out["theta"], "vega": out["vega"],
+        "nav": out["date"].map(nav),
+        "notional": out["totals_qty"] * 100 * out["leg_1_strike"],
+        "holding_days": out["holding_days"],
+        "realized_pnl": out["realized_pnl"],
+    })
+    df["dollars_pct_of_nav"] = df["dollars"] / df["nav"]
+    df["notional_pct_of_nav"] = df["notional"] / df["nav"]
+    df = df.sort_values(["date", "order"]).reset_index(drop=True)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False, float_format="%.6g")
+    return df
+
+
 def main():
     opts = HistoricalOptionsData("data/processed/options.parquet")
     stocks = TiingoData("data/processed/stocks.csv")
@@ -279,6 +408,9 @@ def main():
     )
     png = save_contracts_held_png(bt.balance, CONTRACTS_PNG)
     print(f"\nwrote {png}")
+
+    trades = write_trade_log(bt, TRADES_CSV)
+    print(f"wrote {TRADES_CSV}  ({len(trades)} trades, {trades.shape[1]} columns)")
 
 
 if __name__ == "__main__":
