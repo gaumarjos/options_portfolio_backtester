@@ -13,10 +13,7 @@ Modifica i parametri nella sezione CONFIG e rilancia:
 
 ### TODO
 # 0) Add a plot with live quantities
-# 1) Rolling (buy on sell date), code there, a few things to fix
 # 2) Run through time instead of buy-hold
-#
-
 
 
 
@@ -50,17 +47,32 @@ EXIT_DTE = 30                #
 REBAL_FREQ, REBAL_UNIT = 2, "BMS"  # bimestrale; (1, "BMS") = mensile
 CAPITALE = 100_000
 
-# Roll the put the same day it is sold, instead of waiting for the next
-# calendar rebalance. Entries only ever happen on rebalance dates, so this
-# works by ADDING every exit date to the rebalance calendar. Exit dates are
-# DTE-driven and unknown in advance -> iterate to a fixed point.
+# What opens a new put position:
+#   "calendar"      — only on rebalance dates. This is what the engine always
+#                     did. It leaves the book bare between a DTE-30 exit and
+#                     the next rebalance date: 138 days (3.1%) over 2008-2025,
+#                     and the gaps land right AFTER the hedge pays, because
+#                     that is when the winner rolls off.
+#   "roll"          — buy whenever the book is flat, on any day. Closes every
+#                     gap, but holds only one position at a time and so gives
+#                     up the stacking that "calendar" gets for free from the
+#                     top-up budget model. Measurably worse: see table below.
+#   "roll+calendar" — roll AND top up on rebalance dates. Continuous coverage
+#                     with the stacking kept.
 #
-# CAVEAT: options_alloc = NAV * BUDGET / rebalances_per_year, so adding
-# rebalance dates shrinks the per-rebalance budget and lowers realized spend.
-# Compare the "premium spend" line below across runs and scale BUDGET if you
-# want spend held constant.
-ROLL_ON_EXIT = True
-ROLL_ITERS = 3
+# SPY 2008-2025, BUDGET=0.015, 40-45% OTM, DTE 90-180, EXIT_DTE 30, 2BMS:
+#
+#   mode            CAGR     maxDD    bare days   spend/yr   entries
+#   calendar       14.38%   -27.11%   138 (3.1%)   1.218%      101
+#   roll           11.59%   -40.43%     0 (0.0%)   1.112%       80
+#   roll+calendar  14.33%   -27.17%     0 (0.0%)   1.261%      117
+#
+# Pure "roll" underperforms for a structural reason worth remembering: it holds
+# exactly one position, so when it re-enters during a vol spike the fixed
+# budget buys almost nothing. In Oct 2008 it rolled into a single contract at
+# $148 and carried that through the crash — mean option value over the GFC was
+# 1.40% of NAV against 3.80% for "calendar".
+WHEN_TO_BUY = "roll+calendar"
 TEARSHEET = "output/{}_tearsheet.html".format(TEST_STR)
 CSV = "output/{}_curve.csv".format(TEST_STR)
 
@@ -75,6 +87,7 @@ def engine_spitznagel(opts, stocks, schema):
     bt.options_budget_annual_pct = BUDGET   # 
     bt.check_exits_daily = True             # controlli di uscita giornalieri
     bt.rebalance_stocks_on_exit = True      # monetizza e ricompra SPY
+    bt.when_to_buy = WHEN_TO_BUY            # calendar | roll | roll+calendar
     bt.stocks = [Stock("SPY", 1.0)]
     bt.stocks_data = stocks
     bt.options_data = opts
@@ -144,7 +157,10 @@ def coverage(bt):
     entries happen ONLY on rebalance dates: the gaps come from that mismatch,
     not from unfilled entries (option_fill_rate stays 100%).
     """
-    days = pd.to_datetime(bt.balance.index)
+    # Row 0 is the synthetic pre-start row the engine prepends (initial capital
+    # at stocks_data.start_date - 1 day). It predates any trading, so counting
+    # it as "uncovered" is noise.
+    days = pd.to_datetime(bt.balance.index)[1:]
     tl = _flat_trades(bt)
 
     open_count = pd.Series(0, index=days)
@@ -195,105 +211,23 @@ def print_coverage(bt):
 
 
 
-### EXTRA CODE TO ROLL (SELL/BUY) ON SAME DAY
-
-# WHY A GAP EXISTS AT ALL
-# Exits are DTE-driven and, with check_exits_daily=True, evaluated on every
-# trading day. Entries happen ONLY on rebalance dates. A put sold at DTE 30 is
-# therefore not replaced until the next calendar rebalance, which with 2BMS can
-# be up to ~43 trading days later. Measured on the baseline config: 130 days
-# (2.9%) with no put at all, in 6 stretches -- and the stretches land right
-# AFTER the hedge pays, because that is when the winner rolls off. The worst
-# ones were 2020-03-19 -> 2020-04-30 (through the COVID bottom of 03-23) and
-# 2008-11-21 -> 2008-12-31. Note this is NOT a fill problem: option_fill_rate
-# was 100% (101 attempts, 0 unfilled) over 2008-2025.
+### ROLLING (SELL/BUY ON THE SAME DAY)
 #
-# HOW THIS FIXES IT
-# The only lever is to MAKE each exit date a rebalance date. run() accepts a
-# `rebalance_dates` override which takes precedence over rebalance_freq (see
-# engine.py, the `if rebalance_dates_override` branch before `elif
-# rebalance_freq`). Inside a rebalance the engine runs exits FIRST, then
-# recomputes options_cap (now 0), so remaining_budget > 0 and the entry fires
-# the same day: a true roll.
-# Exit dates are not known in advance -- they depend on which contracts were
-# entered, which depends on the calendar -- so run_rolling() iterates to a
-# fixed point: run, collect STC dates, fold them into the calendar, repeat.
+# This used to be a workaround here: run once, collect the exit dates, feed
+# them back in as extra rebalance dates via run()'s `rebalance_dates` override,
+# and iterate to a fixed point. It closed most of the gaps (130 bare days -> 28)
+# but was wrong in a way worth recording: adding dates to the rebalance calendar
+# inflates `rebalances_per_year`, and the per-entry budget is
+# NAV * BUDGET / rebalances_per_year -- so it silently cut premium spend from
+# 1.218%/yr to 0.775%/yr and made every comparison against calendar mode
+# meaningless.
 #
-# MEASURED (SPY 2008-2025, BUDGET=0.015, 40-45% OTM, DTE 90-180, EXIT_DTE 30)
-#                       baseline      roll-on-exit
-#   days with no put    130 (2.9%)    28 (0.6%)
-#   premium spend       1.218%/yr     0.775%/yr
-#   CAGR                14.38%        12.82%
-#
-# THREE CAVEATS
-# 1. The CAGR comparison above is CONFOUNDED. options_alloc =
-#    NAV * BUDGET / rebalances_per_year, and this goes from ~108 to ~254
-#    rebalance dates, so the per-rebalance allocation shrinks and realized
-#    spend falls to ~2/3. For a like-for-like test scale BUDGET by
-#    1.218/0.775 ~= 1.57 (i.e. BUDGET = 0.0236) and compare again.
-# 2. The date set does not converge in 3 iterations (each new entry creates a
-#    new exit date), but the metric that matters does: 28 bare days at both
-#    iteration 2 and 3. Raising ROLL_ITERS buys little.
-# 3. The residual 27-day gap (2008-11-21 -> 2008-12-31) is NOT the calendar.
-#    Fill rate drops to 99.1% with 2 unfilled entries: the roll was attempted
-#    on 2008-11-20 and the chain offered no 40-45% OTM strike at 90-180 DTE.
-#    At the peak of the GFC that contract simply did not exist.
-#
-# ALTERNATIVE THAT WAS TRIED AND REJECTED
-# Setting check_exits_daily=False also makes exit and entry happen in the same
-# rebalance step, with no budget dilution. But then the dte<=30 filter is only
-# evaluated every ~61 days, and 80 of 98 puts EXPIRED before a rebalance ever
-# looked at them -- booked at totals_cost=0.0 via the intrinsic fallback. The
-# GFC winner that sold for $29,400 on 2008-11-20 instead expired on 2008-12-20
-# and was written off at zero. CAGR 9.87% under that setting is an artifact of
-# throwing away the payoffs, not a clean baseline.
-
-
-def exit_dates(bt):
-    tl = _flat_trades(bt)
-    return sorted(set(tl.loc[tl["leg_1_order"] == "STC", "date"]))
-
-
-def calendar_rebalance_dates(trading_days, freq, unit):
-    """The dates run() would pick for (freq, unit): first trading day of each
-    bucket — same rule the engine uses internally."""
-    s = pd.Series(1, index=pd.to_datetime(trading_days))
-    picked = (s.groupby(pd.Grouper(freq=f"{freq}{unit}"))
-               .apply(lambda x: x.index.min()).dropna())
-    return list(pd.to_datetime(picked.values))
-
-
-def run_rolling(make_engine, iters=ROLL_ITERS):
-    """Run so every exit date is also a rebalance date -> the put is replaced
-    the same day it is sold.
-
-    Exit dates depend on which contracts were entered, which depends on the
-    rebalance calendar, so this iterates: run, collect exit dates, fold them
-    into the calendar, repeat until the exit dates stop changing.
-    """
-    bt = make_engine()
-    bt.run(rebalance_freq=REBAL_FREQ, rebalance_unit=REBAL_UNIT)
-    base = calendar_rebalance_dates(bt.balance.index, REBAL_FREQ, REBAL_UNIT)
-    seen = exit_dates(bt)
-    for i in range(iters):
-        dates = sorted(set(base) | set(seen))
-        nxt = make_engine()
-        nxt.run(rebalance_freq=REBAL_FREQ, rebalance_unit=REBAL_UNIT,
-                rebalance_dates=dates)
-        found = exit_dates(nxt)
-        bt = nxt
-        if set(found) == set(seen):
-            print(f"  roll calendar converged after {i + 1} iteration(s), "
-                  f"{len(dates)} rebalance dates")
-            break
-        seen = found
-    else:
-        print(f"  roll calendar not converged in {iters} iterations, "
-              f"{len(dates)} rebalance dates")
-    return bt
-
-
-###
+# The engine now does this natively and without touching the calendar: set
+# WHEN_TO_BUY above. Entries fire on any day the book is flat, so a roll that
+# finds no tradeable contract retries the next day instead of leaving the book
+# bare (which is what a one-shot buy-on-the-exit-date rule would do -- and did,
+# for 27 days after 2008-11-20 when the chain had no 40-45% OTM strike at
+# 90-180 DTE).
 
 
 def main():
@@ -301,12 +235,10 @@ def main():
     stocks = TiingoData("data/processed/stocks.csv")
     schema = opts.schema
 
-    print(f"Backtest overlay Spitznagel (budget {BUDGET:.1%}/yr, {OTM_LO:.0%}-{OTM_HI:.0%} OTM)")
-    if ROLL_ON_EXIT:
-        bt = run_rolling(lambda: engine_spitznagel(opts, stocks, schema))
-    else:
-        bt = engine_spitznagel(opts, stocks, schema)
-        bt.run(rebalance_freq=REBAL_FREQ, rebalance_unit=REBAL_UNIT)
+    print(f"Backtest overlay Spitznagel (budget {BUDGET:.1%}/yr, "
+          f"{OTM_LO:.0%}-{OTM_HI:.0%} OTM, when_to_buy={WHEN_TO_BUY})")
+    bt = engine_spitznagel(opts, stocks, schema)
+    bt.run(rebalance_freq=REBAL_FREQ, rebalance_unit=REBAL_UNIT)
 
     print("Backtest baseline SPY")
     spy = engine_spy(opts, stocks, schema)
