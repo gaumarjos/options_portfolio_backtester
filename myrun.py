@@ -47,6 +47,15 @@ EXIT_DTE = 30                #
 REBAL_FREQ, REBAL_UNIT = 2, "BMS"  # bimestrale; (1, "BMS") = mensile
 CAPITALE = 100_000
 
+# Cost of funding the put premium on margin. The "external budget" framing is
+# an accounting fiction — everything you own or can borrow is one balance
+# sheet — so the premium is really borrowed and carried until the position is
+# closed. That float is the only thing external funding was giving away free;
+# the premium itself is already charged to the portfolio at exit.
+# actual/360 is the USD broker convention (IBKR et al).
+MARGIN_RATE = 0.03718
+MARGIN_DAYCOUNT = 360
+
 # What opens a new put position:
 #   "calendar"      — only on rebalance dates. This is what the engine always
 #                     did. It leaves the book bare between a DTE-30 exit and
@@ -265,7 +274,10 @@ def write_trade_log(bt, path):
     # --- round-trip pairing: FIFO per contract -------------------------
     tl["trade_id"] = pd.NA
     tl["holding_days"] = pd.NA
+    tl["entry_basis"] = pd.NA
     tl["realized_pnl"] = pd.NA
+    tl["margin_interest"] = pd.NA
+    tl["pnl_after_margin"] = pd.NA
     queues, next_id = {}, 1
     for i, r in tl.iterrows():
         c = r["leg_1_contract"]
@@ -278,11 +290,16 @@ def write_trade_log(bt, path):
             q = queues.get(c) or []
             if q:
                 tid, edate, ecost, eqty = q.pop(0)
+                held = (r["date"] - edate).days
+                basis = ecost * eqty
+                pnl = (-r["totals_cost"]) * r["totals_qty"] - basis
+                interest = basis * MARGIN_RATE * held / MARGIN_DAYCOUNT
                 tl.at[i, "trade_id"] = tid
-                tl.at[i, "holding_days"] = (r["date"] - edate).days
-                # entry paid ecost/contract, exit receives -cost/contract
-                tl.at[i, "realized_pnl"] = (
-                    (-r["totals_cost"]) * r["totals_qty"] - ecost * eqty)
+                tl.at[i, "holding_days"] = held
+                tl.at[i, "entry_basis"] = basis
+                tl.at[i, "realized_pnl"] = pnl
+                tl.at[i, "margin_interest"] = interest
+                tl.at[i, "pnl_after_margin"] = pnl - interest
 
     # --- market context from the processed chain -----------------------
     import pyarrow.parquet as pq
@@ -350,7 +367,10 @@ def write_trade_log(bt, path):
         "nav": out["date"].map(nav),
         "notional": out["totals_qty"] * 100 * out["leg_1_strike"],
         "holding_days": out["holding_days"],
+        "entry_basis": out["entry_basis"],
         "realized_pnl": out["realized_pnl"],
+        "margin_interest": out["margin_interest"],
+        "pnl_after_margin": out["pnl_after_margin"],
     })
     df["dollars_pct_of_nav"] = df["dollars"] / df["nav"]
     df["notional_pct_of_nav"] = df["notional"] / df["nav"]
@@ -358,6 +378,64 @@ def write_trade_log(bt, path):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, index=False, float_format="%.6g")
     return df
+
+
+def margin_cost(bt):
+    """Daily borrowed balance from funding put premium, and its interest cost.
+
+    The borrowed amount is a position's entry basis, outstanding from the day
+    it is bought until the day it is sold — at which point proceeds (and, when
+    they fall short, the portfolio) clear it. That is exactly how the engine
+    already books the premium, so this measures the one thing the external-
+    budget framing was giving away free: the float.
+
+    Returns (daily_balance, total_interest).
+    """
+    tl = _flat_trades(bt)
+    days = pd.to_datetime(bt.balance.index)[1:]
+    balance = pd.Series(0.0, index=days)
+    queues = {}
+    for _i, r in tl.sort_values("date").iterrows():
+        c = r["leg_1_contract"]
+        if r["leg_1_order"] == "BTO":
+            queues.setdefault(c, []).append(
+                (r["date"], r["totals_cost"] * r["totals_qty"]))
+        else:
+            q = queues.get(c) or []
+            if q:
+                edate, basis = q.pop(0)
+                balance.loc[(days >= edate) & (days < r["date"])] += basis
+    # Still-open positions stay borrowed through the end of the sample.
+    for c, q in queues.items():
+        for edate, basis in q:
+            balance.loc[days >= edate] += basis
+    # Interest accrues on CALENDAR days, but the balance index only has
+    # trading days. Weight each row by the gap to the next one, so a Friday
+    # balance is charged for Sat and Sun too. Summing unweighted would
+    # undercount by ~252/360.
+    idx = balance.index
+    gap = pd.Series(idx.to_series().shift(-1).sub(idx.to_series()).dt.days.values,
+                    index=idx).fillna(1.0).clip(lower=0)
+    total = float((balance * MARGIN_RATE / MARGIN_DAYCOUNT * gap).sum())
+    return balance, total
+
+
+def print_margin(bt):
+    balance, total = margin_cost(bt)
+    nav = bt.balance["total capital"]
+    nav.index = pd.to_datetime(nav.index)
+    nav = nav.reindex(balance.index)
+    years = (balance.index[-1] - balance.index[0]).days / 365.25
+    print()
+    print(f"{'Margin funding':24}")
+    print(f"  rate                    {MARGIN_RATE:>7.3%}/yr "
+          f"(actual/{MARGIN_DAYCOUNT})")
+    print(f"  borrowed, mean          {balance.mean() / nav.mean():>7.3%} of NAV "
+          f"(${balance.mean():,.0f})")
+    print(f"  borrowed, peak          {balance.max() / nav.mean():>7.3%} of NAV "
+          f"(${balance.max():,.0f})")
+    print(f"  interest total          {total:>7,.0f} over {years:.1f} yr")
+    print(f"  interest per year       {total / years / nav.mean():>7.4%} of NAV")
 
 
 def main():
@@ -397,6 +475,7 @@ def main():
     print(f"{'Excess':24}{c1 - c0:>+7.2f}pp {d1 - d0:>+7.1f}pp")
 
     print_coverage(bt)
+    print_margin(bt)
 
     timeseries = serie_strat.rename("strategia_usd").rename_axis("data")
     timeseries.to_csv(CSV, float_format="%.2f")

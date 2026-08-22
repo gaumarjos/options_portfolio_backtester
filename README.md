@@ -8,15 +8,14 @@ Backtest options strategies with realistic execution, Greeks-aware risk manageme
 1) Fixed backcalculation errors at rebalancing
 2) Roll and calendar+roll scheduling schemes. Goal is to avoid unocovered periods.
 3) Plot with number of contracts held day-by-day
+4) Cost of margin as overlay is bought at margin
 
 ### TODO
 1) Incremental purchasing vs buy-and-hold
-2) Cost of margin if overlay is bought at margin
-3) German taxes
-4) Add SPX and XSP
-5) 
+2) German taxes
+3) Add SPX and XSP 
 
-### ⚠️ Known data traps
+### Known issues
 
 **Greeks and IV are unusable before 2010.** In `data/processed/options.parquet`
 the 2008-2009 rows carry a broken implied vol, and delta/gamma/theta/vega are
